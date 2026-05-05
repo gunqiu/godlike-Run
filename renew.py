@@ -21,85 +21,78 @@ def run():
                 login_switch.click(force=True)
                 time.sleep(2)
 
-            # 2. 暴力 JS 注入输入 (解决输入框为空的问题)
-            print("正在通过 JS 注入账号密码...")
+            # 2. 精准账号密码输入
+            print("开始精准输入凭据...")
             email = os.environ["GODLIKE_EMAIL"]
             password = os.environ["GODLIKE_PASSWORD"]
 
-            # 这段 JS 会找到输入框，强行赋值并发送“我正在输入”的信号
-            js_code = f"""
-            (email, pwd) => {{
-                const emailInput = document.querySelector('input[type="email"], input[placeholder*="Email"], input[placeholder*="Username"]');
-                const pwdInput = document.querySelector('input[type="password"]');
-                
-                if (emailInput && pwdInput) {{
-                    emailInput.value = email;
-                    emailInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    emailInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    
-                    pwdInput.value = pwd;
-                    pwdInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    pwdInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    return true;
-                }}
-                return false;
-            }}
-            """
-            success = page.evaluate(js_code, [email, password])
+            # 使用更宽泛但排他的 CSS 选择器
+            # 账号框通常是第一个 input，或者是 type 为 text/email 的那个
+            email_input = page.locator('input:not([type="password"]):not([type="hidden"])').first
+            pwd_input = page.locator('input[type="password"]')
+
+            # 先清空，再慢速打字
+            email_input.click()
+            # 强制清空旧内容
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Backspace")
+            page.keyboard.type(email, delay=150)
             
-            if success:
-                print("JS 注入成功，等待 2 秒确认数据挂载...")
-                time.sleep(2)
-                page.screenshot(path="debug_js_check.png") # 检查这里框里有没有字
-            else:
-                print("JS 定位输入框失败。")
+            pwd_input.click()
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Backspace")
+            page.keyboard.type(password, delay=150)
+
+            # 截图验证
+            page.screenshot(path="double_check_input.png")
 
             # 3. 点击登录
             print("点击登录按钮...")
-            page.locator('button:has-text("Login")').first.click()
+            # 有时按钮也是动态的，我们直接按回车
+            page.keyboard.press("Enter")
 
             # 4. 检查跳转
             try:
                 page.wait_for_url(lambda url: "login" not in url, timeout=15000)
                 print("登录成功！")
             except:
-                print("登录跳转失败。请检查 debug_js_check.png。")
-                # 如果还是空的，尝试最后的物理模拟：
-                print("尝试最后的物理模拟点击输入...")
-                page.click('input[type="email"]')
-                page.keyboard.type(email)
-                page.screenshot(path="final_resort_check.png")
-                return
+                print("登录跳转失败，正在尝试备用点击方案...")
+                # 备用方案：如果回车没用，点那个明显的蓝色按钮
+                page.locator('button', has_text="Login").click()
+                time.sleep(5)
+                if "login" in page.url:
+                    page.screenshot(path="final_fail.png")
+                    return
 
             # 5. 后续续期逻辑
+            print("访问续期页面...")
             page.goto("https://ultra.panel.godlike.host/server/2a3af930", wait_until="networkidle")
             time.sleep(5)
             page.keyboard.press("Escape") 
 
-            if page.get_by_text("Video will be available in").is_visible():
-                print("【跳过】已在冷却。")
-                return
-
-            renew_btn = page.get_by_role("button", name="Renew").first
+            # 检测 Renew 按钮
+            renew_btn = page.locator('button:has-text("Renew")').first
             if renew_btn.is_visible():
                 renew_btn.click()
-                time.sleep(3)
-                page.locator('.fa-play').first.click()
-                time.sleep(2)
-                page.mouse.click(640, 400) 
+                print("开始观看视频...")
+                time.sleep(5)
+                # 强制点击视频区域中心
+                page.mouse.click(640, 450)
                 
-                for _ in range(40):
+                print("循环检测领取按钮...")
+                for _ in range(45):
                     get_btn = page.get_by_role("button", name="Get +12 Hours")
                     if get_btn.is_visible():
                         get_btn.click()
                         print("【成功】领取完成！")
-                        page.screenshot(path="success.png")
+                        page.screenshot(path="success_final.png")
                         return
                     time.sleep(10)
+            else:
+                print("未发现续期按钮，可能已续期或页面加载未完成。")
 
         except Exception as e:
             print(f"异常: {e}")
-            page.screenshot(path="error_exception.png")
         finally:
             browser.close()
 
