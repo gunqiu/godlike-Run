@@ -5,7 +5,6 @@ from playwright.sync_api import sync_playwright
 def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # 严格锁定视口大小，确保坐标精确
         context = browser.new_context(
             viewport={'width': 1280, 'height': 800},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -13,7 +12,7 @@ def run():
         page = context.new_page()
 
         try:
-            # 1. 登录流程 (保持你原本稳健的逻辑)
+            # 1. 登录流程 (保持不变)
             print("正在访问登录页面...")
             page.goto("https://ultra.panel.godlike.host/login", wait_until="networkidle")
             
@@ -34,37 +33,52 @@ def run():
             # 2. 前往管理页
             print("正在前往服务器管理页面...")
             page.goto("https://ultra.panel.godlike.host/server/2a3af930", wait_until="networkidle")
-            
-            # 关键：先向下滚动，确保 Renew 区域被加载并进入视野
-            print("向下滚动页面并等待渲染...")
             page.mouse.wheel(0, 500) 
             time.sleep(10) 
 
-            # 3. 强制坐标点击 Renew 按钮
-            # 根据你的截图 1280x800 布局，Renew 按钮中心点大约在 (260, 750)
-            print("执行强制坐标点击 (260, 750)...")
+            # --- 关键修复：清除促销弹窗 ---
+            def clear_popups():
+                print("检测并处理干扰弹窗...")
+                popups = [
+                    "text=I'm fine with waiting in the queue",
+                    "svg.fa-times", 
+                    "button:has-text('Close')"
+                ]
+                for selector in popups:
+                    try:
+                        target = page.locator(selector).first
+                        if target.is_visible():
+                            target.click(timeout=3000)
+                            print(f"已清理弹窗: {selector}")
+                            time.sleep(2)
+                    except:
+                        continue
+
+            # 点 Renew 前清理一次
+            clear_popups()
+
+            # 3. 点击 Renew 按钮
+            print("执行强制坐标点击 Renew (260, 750)...")
             page.mouse.click(260, 750)
             time.sleep(5) 
 
-            # 4. 点击播放弹窗中的三角形
+            # 点 Renew 后如果又出了广告，再清理一次
+            clear_popups()
+
+            # 4. 启动视频播放
             print("尝试启动视频播放...")
-            # 方案一：点击坐标 (弹窗正中心大约在 640, 480)
-            page.mouse.click(640, 480)
-            # 方案二：备选点击图标名
-            try:
-                page.locator(".fa-play").first.click(timeout=3000)
-            except:
-                pass
+            # 点击视频弹窗正中心 (大约 640, 430)
+            page.mouse.click(640, 430)
+            time.sleep(2)
             
             # 5. 循环监听领取按钮
             print("视频播放中，开始监听领取按钮...")
             found = False
-            for i in range(40): # 最多等 400 秒
-                # 模糊匹配包含 "Get" 和 "hour" 的按钮
+            for i in range(45): # 增加到 450 秒防止超长视频
                 get_btn = page.locator('button:has-text("Get")').filter(has_text="hour")
                 
                 if get_btn.is_visible():
-                    print("【成功】检测到领取按钮，正在领取...")
+                    print("【成功】检测到领取按钮，正在点击...")
                     get_btn.click(force=True)
                     time.sleep(5)
                     page.screenshot(path="success_final.png")
@@ -76,7 +90,7 @@ def run():
                 time.sleep(10)
                 
             if not found:
-                print("超时未发现领取按钮，保存截图查原因")
+                print("超时未发现领取按钮，保存截图...")
                 page.screenshot(path="timeout_check.png")
 
         except Exception as e:
