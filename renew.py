@@ -33,64 +33,83 @@ def run():
             # 2. 前往管理页
             print("正在前往服务器管理页面...")
             page.goto("https://ultra.panel.godlike.host/server/2a3af930", wait_until="networkidle")
-            page.mouse.wheel(0, 500) 
-            time.sleep(10) 
-
-            # --- 关键修复：清除促销弹窗 ---
-            def clear_popups():
-                print("检测并处理干扰弹窗...")
-                popups = [
+            
+            # --- 强化版弹窗清理逻辑 ---
+            def force_clear_popups():
+                print("深度检测并清除干扰弹窗...")
+                # 针对截图中出现的文字和按钮进行多种定位
+                selectors = [
                     "text=I'm fine with waiting in the queue",
-                    "svg.fa-times", 
-                    "button:has-text('Close')"
+                    "text=Do you love Godlike?",
+                    ".v-overlay__scrim", # 遮罩层
+                    "svg.fa-times",       # 右上角关闭图标
+                    "button:has-text('Claim -50% Off')" # 虽然不点它，但可以用它辅助判断弹窗存在
                 ]
-                for selector in popups:
-                    try:
-                        target = page.locator(selector).first
-                        if target.is_visible():
-                            target.click(timeout=3000)
-                            print(f"已清理弹窗: {selector}")
-                            time.sleep(2)
-                    except:
-                        continue
-
-            # 点 Renew 前清理一次
-            clear_popups()
+                
+                for _ in range(5): # 最多尝试清理 5 次
+                    found_popup = False
+                    # 优先点击那个灰色的“我愿意排队”文字
+                    wait_text = page.get_by_text("I'm fine with waiting in the queue")
+                    if wait_text.is_visible():
+                        print("发现促销弹窗，点击 'I'm fine with waiting in the queue' 尝试关闭...")
+                        wait_text.click(force=True, timeout=5000)
+                        found_popup = True
+                        time.sleep(2)
+                    
+                    # 备选：点击 ESC 键
+                    page.keyboard.press("Escape")
+                    
+                    if not found_popup:
+                        break
+            
+            # 页面加载后先清理
+            time.sleep(5)
+            force_clear_popups()
 
             # 3. 点击 Renew 按钮
-            print("执行强制坐标点击 Renew (260, 750)...")
+            print("向下滚动并执行 Renew 点击 (260, 750)...")
+            page.mouse.wheel(0, 500)
+            time.sleep(2)
             page.mouse.click(260, 750)
             time.sleep(5) 
 
-            # 点 Renew 后如果又出了广告，再清理一次
-            clear_popups()
+            # 点击后如果又触发了弹窗，再次清理
+            force_clear_popups()
 
             # 4. 启动视频播放
             print("尝试启动视频播放...")
-            # 点击视频弹窗正中心 (大约 640, 430)
-            page.mouse.click(640, 430)
+            # 此时应该出现的是 Choose Renewal Method 弹窗
+            # 点击视频预览区正中心 (大约 640, 480)
+            page.mouse.click(640, 480)
             time.sleep(2)
             
             # 5. 循环监听领取按钮
-            print("视频播放中，开始监听领取按钮...")
+            print("正在监听领取按钮...")
             found = False
-            for i in range(45): # 增加到 450 秒防止超长视频
+            for i in range(45): 
+                # 寻找包含 Get 和 hour 的按钮
                 get_btn = page.locator('button:has-text("Get")').filter(has_text="hour")
                 
                 if get_btn.is_visible():
-                    print("【成功】检测到领取按钮，正在点击...")
+                    print("【成功】检测到领取按钮，点击领取！")
                     get_btn.click(force=True)
                     time.sleep(5)
                     page.screenshot(path="success_final.png")
                     found = True
                     break
                 
+                # 如果在等待期间又蹦出了促销弹窗，顺手点掉
+                if i % 5 == 0:
+                    wait_text = page.get_by_text("I'm fine with waiting in the queue")
+                    if wait_text.is_visible():
+                        wait_text.click(force=True)
+                
                 if i % 3 == 0:
                     print(f"等待视频结束中... ({i*10}s)")
                 time.sleep(10)
                 
             if not found:
-                print("超时未发现领取按钮，保存截图...")
+                print("未发现领取按钮，保存截图...")
                 page.screenshot(path="timeout_check.png")
 
         except Exception as e:
