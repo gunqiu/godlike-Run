@@ -12,83 +12,90 @@ def run():
         page = context.new_page()
 
         try:
-            # 1. 访问登录页
             print("正在访问登录页面...")
             page.goto("https://ultra.panel.godlike.host/login", wait_until="networkidle")
             
-            # 2. 切换到密码模式 (1号图 -> 2号图)
+            # 1. 切换到密码模式
             login_switch = page.get_by_text("Through Login/Password")
             if login_switch.is_visible():
                 login_switch.click(force=True)
                 time.sleep(2)
 
-            # 3. 强力输入账号密码 (模拟真人按键)
-            print("正在模拟真人输入凭据...")
-            email_field = page.locator('input[type="email"], input[placeholder*="Email"], input[placeholder*="Username"]')
-            pass_field = page.locator('input[type="password"]')
-            
-            # 确保输入框可见
-            email_field.wait_for(state="visible", timeout=10000)
-            
-            # 点击并清空，然后逐字输入
-            email_field.click()
-            page.keyboard.type(os.environ["GODLIKE_EMAIL"], delay=100) # 每个字母间隔100毫秒
-            
-            pass_field.click()
-            page.keyboard.type(os.environ["GODLIKE_PASSWORD"], delay=100)
-            
-            # 此时截个图，确认字有没有打进去 (调试用)
-            page.screenshot(path="debug_typing_check.png")
+            # 2. 暴力 JS 注入输入 (解决输入框为空的问题)
+            print("正在通过 JS 注入账号密码...")
+            email = os.environ["GODLIKE_EMAIL"]
+            password = os.environ["GODLIKE_PASSWORD"]
 
-            # 4. 提交登录
+            # 这段 JS 会找到输入框，强行赋值并发送“我正在输入”的信号
+            js_code = f"""
+            (email, pwd) => {{
+                const emailInput = document.querySelector('input[type="email"], input[placeholder*="Email"], input[placeholder*="Username"]');
+                const pwdInput = document.querySelector('input[type="password"]');
+                
+                if (emailInput && pwdInput) {{
+                    emailInput.value = email;
+                    emailInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    emailInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    
+                    pwdInput.value = pwd;
+                    pwdInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    pwdInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    return true;
+                }}
+                return false;
+            }}
+            """
+            success = page.evaluate(js_code, [email, password])
+            
+            if success:
+                print("JS 注入成功，等待 2 秒确认数据挂载...")
+                time.sleep(2)
+                page.screenshot(path="debug_js_check.png") # 检查这里框里有没有字
+            else:
+                print("JS 定位输入框失败。")
+
+            # 3. 点击登录
             print("点击登录按钮...")
-            # 尝试定位那个蓝色的 Login 按钮
-            login_btn = page.locator('button:has-text("Login")').first
-            login_btn.click()
+            page.locator('button:has-text("Login")').first.click()
 
-            # 5. 等待跳转
+            # 4. 检查跳转
             try:
-                # 如果 15 秒内没跳转，说明账号密码错或有验证码
                 page.wait_for_url(lambda url: "login" not in url, timeout=15000)
                 print("登录成功！")
             except:
-                print("登录跳转失败。请查看 debug_typing_check.png 确认账号密码是否输入。")
-                page.screenshot(path="fail_after_submit.png")
+                print("登录跳转失败。请检查 debug_js_check.png。")
+                # 如果还是空的，尝试最后的物理模拟：
+                print("尝试最后的物理模拟点击输入...")
+                page.click('input[type="email"]')
+                page.keyboard.type(email)
+                page.screenshot(path="final_resort_check.png")
                 return
 
-            # 6. 后续续期逻辑 (保持不变)
+            # 5. 后续续期逻辑
             page.goto("https://ultra.panel.godlike.host/server/2a3af930", wait_until="networkidle")
             time.sleep(5)
-            page.keyboard.press("Escape") # 关弹窗
+            page.keyboard.press("Escape") 
 
-            # 检查冷却 (4号图)
             if page.get_by_text("Video will be available in").is_visible():
-                print("【跳过】已在冷却期。")
+                print("【跳过】已在冷却。")
                 return
 
-            # 寻找并点击 Renew (5号图)
             renew_btn = page.get_by_role("button", name="Renew").first
             if renew_btn.is_visible():
                 renew_btn.click()
-                print("开始视频流程...")
                 time.sleep(3)
-                # 播放视频 (6, 7, 8号图)
                 page.locator('.fa-play').first.click()
                 time.sleep(2)
                 page.mouse.click(640, 400) 
                 
-                # 循环领取 (9号图)
                 for _ in range(40):
                     get_btn = page.get_by_role("button", name="Get +12 Hours")
                     if get_btn.is_visible():
                         get_btn.click()
-                        print("【成功】续期领到！")
+                        print("【成功】领取完成！")
                         page.screenshot(path="success.png")
                         return
                     time.sleep(10)
-            else:
-                print("未找到 Renew 按钮。")
-                page.screenshot(path="error_final_state.png")
 
         except Exception as e:
             print(f"异常: {e}")
