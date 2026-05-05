@@ -11,50 +11,62 @@ def run():
         )
         page = context.new_page()
 
-        # --- 核心黑科技：定义自动清理函数 ---
+        # --- 核心清理函数：处理 50% 折扣和左下角问卷 ---
         def auto_clean():
-            """这个函数会尝试清理页面上目前可见的所有干扰项"""
-            # 1. 中间的大弹窗 (通过文字关闭)
             try:
-                # 尝试点击 'I'm fine with waiting'
+                # 1. 处理中间大弹窗
                 target = page.get_by_text("I'm fine with waiting in the queue").first
                 if target.is_visible():
-                    target.click(force=True, timeout=1000)
-                    print("已自动清理：50% Off 大弹窗")
+                    target.click(force=True, timeout=2000)
+                    print("已清理：50% Off 弹窗")
+                    time.sleep(1)
             except: pass
 
-            # 2. 左下角的问卷/反馈弹窗 (通过右上角的 X 关闭)
             try:
-                # 寻找问卷弹窗里的关闭图标
-                close_icon = page.locator(".v-card").filter(has_text="recommend us").locator(".fa-times, svg").first
-                if close_icon.is_visible():
-                    close_icon.click(force=True, timeout=1000)
-                    print("已自动清理：左下角问卷弹窗")
+                # 2. 处理左下角调查问卷 (寻找问卷卡片上的关闭按钮)
+                survey_close = page.locator(".v-card").filter(has_text="recommend us").locator(".fa-times, svg").first
+                if survey_close.is_visible():
+                    survey_close.click(force=True, timeout=2000)
+                    print("已清理：左下角问卷")
+                    time.sleep(1)
             except: pass
-
-            # 3. 万能 Escape 键
+            
+            # 3. 万能 Esc 键
             page.keyboard.press("Escape")
 
         try:
-            # 1. 登录 (保持不变)
-            print("正在登录...")
-            page.goto("https://ultra.panel.godlike.host/login")
+            # 1. 登录流程 (接回之前确认有效的逻辑)
+            print("正在访问登录页面...")
+            page.goto("https://ultra.panel.godlike.host/login", wait_until="networkidle")
+            
+            # 切换到账号密码模式
             login_switch = page.get_by_text("Through Login/Password")
-            if login_switch.is_visible(): login_switch.click(force=True)
-            page.locator('input[type="email"]').fill(os.environ["GODLIKE_EMAIL"])
-            page.locator('input[type="password"]').fill(os.environ["GODLIKE_PASSWORD"])
+            if login_switch.is_visible():
+                login_switch.click(force=True)
+            
+            print("输入凭据...")
+            # 使用更稳健的选择器并模拟真实打字
+            email_input = page.locator('input[type="email"], input[placeholder*="Email"]').first
+            email_input.wait_for(state="visible")
+            email_input.click()
+            page.keyboard.type(os.environ["GODLIKE_EMAIL"], delay=100)
+            
+            pass_input = page.locator('input[type="password"]').first
+            pass_input.click()
+            page.keyboard.type(os.environ["GODLIKE_PASSWORD"], delay=100)
+            
             page.locator('button:has-text("Login")').first.click()
             page.wait_for_url(lambda url: "login" not in url, timeout=15000)
             print("登录成功！")
 
             # 2. 跳转到管理页
-            print("正在前往管理页，准备处理异步弹窗...")
-            page.goto("https://ultra.panel.godlike.host/server/2a3af930")
+            print("正在前往管理页...")
+            page.goto("https://ultra.panel.godlike.host/server/2a3af930", wait_until="networkidle")
             
-            # 关键：这里等 8 秒，让所有讨厌的弹窗都蹦出来
-            print("等待弹窗完全加载 (8s)...")
+            # 关键：等待 8 秒让弹窗跳完，然后清理
+            print("等待异步干扰弹窗出现并清理 (8s)...")
             time.sleep(8)
-            auto_clean() # 执行第一次深度清理
+            auto_clean()
 
             # 3. 点击 Renew 按钮
             print("执行 Renew 点击 (260, 750)...")
@@ -62,44 +74,42 @@ def run():
             time.sleep(2)
             page.mouse.click(260, 750)
             
-            # 点击 Renew 后可能又会触发弹窗，再等 3 秒清理一次
-            time.sleep(3)
+            # 点完 Renew 如果广告重现，再清一次
+            time.sleep(4)
             auto_clean()
 
             # 4. 启动视频播放
-            # 此时广告应该清理干净了，点击视频弹窗中心
-            print("点击视频播放图标...")
-            page.mouse.click(640, 450)
+            print("尝试点击视频播放区域...")
+            page.mouse.click(640, 430) 
             time.sleep(2)
             
             # 5. 循环监听领取按钮
-            print("正在监听视频结束和领取按钮...")
+            print("视频播放中，开始监听领取按钮...")
             found = False
             for i in range(45): 
-                # 寻找包含 Get 和 hour 的按钮
                 get_btn = page.locator('button:has-text("Get")').filter(has_text="hour")
                 
                 if get_btn.is_visible():
-                    print("【成功】检测到领取按钮，正在点击！")
+                    print("【成功】检测到领取按钮，点击领取！")
                     get_btn.click(force=True)
                     time.sleep(5)
                     page.screenshot(path="success_final.png")
                     found = True
                     break
                 
-                # 期间如果弹窗又回来了，自动清理
+                # 周期性自动清理新出的干扰
                 if i % 3 == 0: 
                     auto_clean()
-                    print(f"等待中... ({i*10}s)")
+                    print(f"正在等待视频结束... ({i*10}s)")
                 
                 time.sleep(10)
                 
             if not found:
-                print("超时未完成，保存当前状态截图...")
+                print("超时未发现领取按钮，请检查截图 final_debug.png")
                 page.screenshot(path="final_debug.png")
 
         except Exception as e:
-            print(f"异常: {e}")
+            print(f"脚本执行异常: {e}")
             page.screenshot(path="error_exception.png")
         finally:
             browser.close()
