@@ -12,67 +12,68 @@ def run():
         page = context.new_page()
 
         try:
-            # 1. 登录 (略，使用你已经成功的逻辑)
+            # --- 保持你之前完全正确的登录代码 ---
             print("正在访问登录页面...")
             page.goto("https://ultra.panel.godlike.host/login", wait_until="networkidle")
             
-            # 模拟输入和登录...
-            # (这里保持你之前的登录代码不变)
-            email_field = page.locator('input[type="email"]')
+            login_switch = page.get_by_text("Through Login/Password")
+            if login_switch.is_visible():
+                login_switch.click(force=True)
+                time.sleep(2)
+
+            print("正在模拟真人输入凭据...")
+            email_field = page.locator('input[type="email"], input[placeholder*="Email"], input[placeholder*="Username"]')
             pass_field = page.locator('input[type="password"]')
-            email_field.fill(os.environ["GODLIKE_EMAIL"])
-            pass_field.fill(os.environ["GODLIKE_PASSWORD"])
+            email_field.wait_for(state="visible", timeout=10000)
+            
+            email_field.click()
+            page.keyboard.type(os.environ["GODLIKE_EMAIL"], delay=100)
+            pass_field.click()
+            page.keyboard.type(os.environ["GODLIKE_PASSWORD"], delay=100)
+            
+            print("点击登录按钮...")
             page.locator('button:has-text("Login")').first.click()
+
             page.wait_for_url(lambda url: "login" not in url, timeout=15000)
             print("登录成功！")
+            # --- 登录部分结束 ---
 
-            # 2. 前往服务器管理页
+            # 2. 进入管理页
             print("正在前往服务器管理页面...")
             page.goto("https://ultra.panel.godlike.host/server/2a3af930", wait_until="networkidle")
             
-            # 关键：多等一会，让左下角的 Renew 卡片加载出来
-            print("等待页面元素加载...")
-            time.sleep(8) 
+            # 这里多等几秒，确保左下角的卡片加载出来
+            time.sleep(10) 
 
-            # 3. 寻找 Renew 按钮 (采用多重定位方案)
+            # 3. 寻找 Renew 按钮 (尝试更精准的卡片定位)
             print("寻找 Renew 按钮...")
             
-            # 方案 A: 寻找带有 "Renew" 文字且在 "Renew Server" 卡片内的按钮
-            # 方案 B: 寻找背景色为蓝色的特定按钮
-            # 方案 C: 模糊匹配
-            renew_selectors = [
-                "div:has-text('Renew Server') >> button:has-text('Renew')", 
-                "button:has-text('Renew')",
-                "//button[contains(., 'Renew')]",
-                "a:has-text('Renew')"
-            ]
+            # 这里的逻辑是：先找包含 "Renew Server" 文字的那个方框，再找里面的按钮
+            # 这样可以避开页面其他地方可能出现的干扰
+            renew_section = page.locator('div:has-text("Renew Server")').last
+            renew_btn = renew_section.locator('button:has-text("Renew")').first
 
-            target_btn = None
-            for selector in renew_selectors:
-                try:
-                    btn = page.locator(selector).first
-                    if btn.is_visible():
-                        target_btn = btn
-                        print(f"成功通过选择器找到按钮: {selector}")
-                        break
-                except:
-                    continue
-
-            if target_btn:
-                # 如果按钮被遮挡，尝试滚动到它
-                target_btn.scroll_into_view_if_needed()
+            if renew_btn.is_visible():
+                print("找到按钮，尝试点击...")
+                renew_btn.scroll_into_view_if_needed()
                 time.sleep(1)
+                renew_btn.click(force=True) 
                 
-                print("点击 Renew 按钮...")
-                # 使用 force=True 强行点击，绕过任何可能的透明遮罩
-                target_btn.click(force=True)
+                # 后面是视频流程...
+                print("点击成功，开始后续流程...")
+                time.sleep(5)
+                # (在此处继续你的视频播放和领取逻辑)
                 
-                # 后面是视频和领取逻辑...
-                print("已点击，进入下一步。")
-                # (保持后续逻辑)
             else:
-                print("【错误】依然找不到按钮。保存当前截图...")
-                page.screenshot(path="not_found_debug.png")
+                print("【警告】直接定位失败，尝试全页面搜索...")
+                # 备用方案：全页面找那个蓝色的 Renew 按钮
+                backup_btn = page.locator('button:has-text("Renew")').first
+                if backup_btn.is_visible():
+                    backup_btn.click(force=True)
+                    print("备用方案点击成功")
+                else:
+                    print("还是没找到，保存截图分析")
+                    page.screenshot(path="not_found_debug.png")
 
         except Exception as e:
             print(f"异常: {e}")
