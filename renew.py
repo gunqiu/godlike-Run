@@ -20,40 +20,23 @@ def run():
         def _premium_watcher():
             while not _watcher_stop.is_set():
                 try:
-                    body = page.locator("body").inner_text(timeout=1000)
-                    if "Do you love Godlike?" in body or "Claim -50% Off" in body:
-                        page.evaluate("""
-                            () => {
-                                function textOf(el){return(el.innerText||el.textContent||'').trim();}
-                                for(const el of document.querySelectorAll('button,a,span,div')){
-                                    if(textOf(el).includes("I'm fine with waiting")){
-                                        el.click(); return;
-                                    }
-                                }
-                            }
-                        """)
+                    # 监控并关闭可能遮挡的 Premium 弹窗
+                    if "I'm fine with waiting" in page.content():
+                        page.get_by_text("I'm fine with waiting").click()
                 except: pass
                 time.sleep(2)
 
-        def start_watcher():
-            t = threading.Thread(target=_premium_watcher, daemon=True)
-            t.start()
-            return t
-
         def save_debug(name):
-            try:
-                page.screenshot(path=f"step_{name}.png", full_page=True)
-                print(f"[截图保存] step_{name}.png")
+            try: page.screenshot(path=f"step_{name}.png", full_page=True)
             except: pass
-
-        def get_body_text():
-            try: return page.locator("body").inner_text(timeout=1500)
-            except: return ""
 
         # ── 步骤 1：登录 ──────────────────────────────────────────────
         print("=" * 50)
         print("步骤 1：登录流程")
-        page.goto(LOGIN_URL, wait_until="domcontentloaded")
+        page.goto(LOGIN_URL, wait_until="networkidle")
+        
+        # 修复：显式等待邮箱输入框出现[cite: 2]
+        page.wait_for_selector('input[type="email"]', timeout=30000)
         page.locator('input[type="email"]').first.fill(os.environ["GODLIKE_EMAIL"])
         page.locator('input[type="password"]').first.fill(os.environ["GODLIKE_PASSWORD"])
         page.locator('button:has-text("Login")').first.click()
@@ -62,84 +45,70 @@ def run():
 
         # ── 步骤 2：打开服务器页面 ─────────────────────────────────────
         print("=" * 50)
-        print("步骤 2：打开服务器管理页面")
+        print("步骤 2：打开管理页面")
         page.goto(SERVER_URL, wait_until="domcontentloaded")
         time.sleep(5)
         
-        print(">>> 启动弹窗监控...")
-        start_watcher()
+        t = threading.Thread(target=_premium_watcher, daemon=True)
+        t.start()
 
         # ── 步骤 3：点击 Renew 按钮 ──────────────────────────────────
         print("=" * 50)
-        print("步骤 3：点击 Renew 按钮")
-        page.evaluate("""
+        print("步骤 3：寻找并点击 Renew 按钮")
+        page.wait_for_selector('button:has-text("Renew")', timeout=20000)
+        page.get_by_text("Renew", exact=True).first.click()
+        time.sleep(5)
+
+        # ── 步骤 4：处理续费弹窗（核心改动：扩大点击范围） ──────────────
+        print("=" * 50)
+        print("步骤 4：处理视频领取区域")
+        save_debug("4_0_before_click")
+
+        # 逻辑：不点三角形，直接点包含文字的黑色大方块[cite: 1]
+        clicked = page.evaluate("""
             () => {
-                const els = document.querySelectorAll('button, [role="button"]');
-                for(const el of els){
-                    if(el.innerText.includes('Renew')){ el.click(); return; }
+                function vis(el){
+                    const r=el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
                 }
+                // 寻找包含特定文本的元素[cite: 1]
+                const targets = Array.from(document.querySelectorAll('div, span, p'));
+                const cardText = targets.find(el => 
+                    el.innerText.includes('Get +24 hours') && vis(el)
+                );
+
+                if (cardText) {
+                    // 向上寻找最近的容器 div[cite: 1]
+                    let container = cardText.parentElement;
+                    while (container && container.tagName !== 'DIV') {
+                        container = container.parentElement;
+                    }
+                    if (container) {
+                        container.click();
+                        return { status: 'success', method: 'container_click' };
+                    }
+                }
+                return { status: 'failed' };
             }
         """)
-        time.sleep(4)
-
-        # ── 步骤 4：点击观看视频区域（扩大范围） ───────────────────────
-        print("=" * 50)
-        print("步骤 4：处理续费弹窗（点击视频播放区域）")
         
-        popup_detected = False
-        for _ in range(15):
-            if "Choose Renewal Method" in get_body_text():
-                popup_detected = True
-                print("✅ 续费弹窗已出现")
-                break
-            time.sleep(1)
-
-        if popup_detected:
-            save_debug("4_1_popup_check")
-            print(">>> 正在定位并点击视频奖励区域...")
-            
-            # 逻辑：寻找包含关键词的元素，并点击它所在的容器
-            clicked = page.evaluate("""
-                () => {
-                    function vis(el){
-                        const r=el.getBoundingClientRect();
-                        return r.width > 0 && r.height > 0;
-                    }
-                    // 寻找包含“+24 hours”或“watching video”的文本
-                    const elements = Array.from(document.querySelectorAll('div, span, p, b'));
-                    const target = elements.find(el => 
-                        (el.innerText.includes('24 hours') || el.innerText.includes('watching video')) && vis(el)
-                    );
-
-                    if (target) {
-                        // 向上找几层父级，确保点到的是大的黑色背景区域
-                        let box = target;
-                        for(let i=0; i<3; i++) {
-                            if(box.parentElement) box = box.parentElement;
-                        }
-                        box.click();
-                        return {ok: true, text: target.innerText.substring(0,20)};
-                    }
-                    return {ok: false};
-                }
-            """)
-            print(f"区域点击尝试: {clicked}")
-            time.sleep(3)
-            
-            # 如果弹窗还在，执行坐标点击（基于 1280x800 中心区域）
-            if "Choose Renewal Method" in get_body_text():
-                print(">>> 弹窗未消失，执行中心坐标兜底点击...")
-                page.mouse.click(640, 300) 
-                time.sleep(2)
-            
-            save_debug("4_2_after_area_click")
+        print(f">>> 区域点击尝试：{clicked}")
+        time.sleep(3)
+        
+        # 兜底：如果没点开，尝试直接点击弹窗正中心[cite: 1]
+        if "Choose Renewal Method" in page.content():
+            print(">>> 弹窗未消失，执行中心位置强点击...")
+            page.mouse.click(640, 280)
+            time.sleep(2)
+        
+        save_debug("4_1_after_click")
 
         # ── 步骤 5：完成 ──────────────────────────────────────────────
         print("=" * 50)
-        print("正在确认任务状态...")
-        time.sleep(5)
+        print("正在确认任务...")
+        time.sleep(10)
         save_debug("5_final")
-        print("🎉 流程运行结束")
+        print("🎉 脚本运行结束")
 
         _watcher_stop.set()
         browser.close()
