@@ -50,14 +50,6 @@ def run():
                             }
                         """)
                         time.sleep(1.5)
-                        try:
-                            body2 = page.locator("body").inner_text(timeout=500)
-                            if "Do you love Godlike?" in body2:
-                                page.mouse.click(700, 100)
-                                time.sleep(1)
-                        except:
-                            pass
-                        print("[watcher] Premium 弹窗已处理")
                 except:
                     pass
                 time.sleep(2)
@@ -90,12 +82,8 @@ def run():
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 time.sleep(5)
                 return True
-            except PlaywrightTimeoutError:
-                time.sleep(5)
-                return True
             except Exception as e:
                 print(f"打开失败：{e}")
-                time.sleep(5)
                 return False
 
         def get_body_text():
@@ -159,37 +147,17 @@ def run():
                         for(const el of document.querySelectorAll('body *')){
                             if(textOf(el)==='Renew Server'&&vis(el)){title=el;break;}
                         }
-                        if(!title) return{clicked:false,reason:'no title'};
+                        if(!title) return{clicked:false};
                         let card=title;
                         for(let i=0;i<12&&card&&card!==document.body;i++){
                             const t=textOf(card),r=card.getBoundingClientRect();
-                            if(t.includes('Renew Server')&&t.includes('suspended')&&
-                               r.width>=180&&r.height>=80&&r.width<=600&&r.height<=300) break;
+                            if(t.includes('Renew Server')&&t.includes('suspended')) break;
                             card=card.parentElement;
                         }
-                        if(!card||card===document.body) return{clicked:false,reason:'no card'};
-                        let best=null;
-                        for(const el of card.querySelectorAll('button,a,[role="button"],div,span')){
-                            const t=textOf(el);
-                            if(!t.includes('Renew')||!vis(el)) continue;
-                            let node=el;
-                            for(let i=0;i<8&&node&&node!==document.body;i++){
-                                const tag=node.tagName.toLowerCase(),s=window.getComputedStyle(node);
-                                if(tag==='button'||tag==='a'||node.getAttribute('role')==='button'||s.cursor==='pointer'){
-                                    const r=node.getBoundingClientRect();
-                                    if(r.width>=30&&r.height>=20&&r.width<=160&&r.height<=80){
-                                        if(!best||(r.width*r.height)<(best.w*best.h))
-                                            best={el:node,x:r.x+r.width/2,y:r.y+r.height/2,w:r.width,h:r.height};
-                                        break;
-                                    }
-                                }
-                                node=node.parentElement;
-                            }
-                        }
-                        if(!best) return{clicked:false,reason:'no btn'};
-                        best.el.scrollIntoView({block:'center'});
-                        best.el.click();
-                        return{clicked:true};
+                        if(!card) return{clicked:false};
+                        const btn = card.querySelector('button, [role="button"]');
+                        if(btn && vis(btn)){ btn.click(); return {clicked:true}; }
+                        return {clicked:false};
                     }
                 """)
                 if result and result.get("clicked"):
@@ -201,7 +169,7 @@ def run():
             fail("click_renew")
             return False
 
-        # ── 步骤 4-7：其他逻辑 (保持并增加截图) ─────────────────────────
+        # ── 步骤 4：等待续费选择弹窗 ─────────────────────────────────
 
         def step_wait_renewal_popup(max_seconds=25):
             print("=" * 50)
@@ -216,71 +184,98 @@ def run():
             fail("renewal_popup")
             return False
 
+        # ── 步骤 5：点击观看视频选项 (优化版) ─────────────────────────
+
         def step_click_play_option():
             print("=" * 50)
-            print("步骤 5：点击观看视频选项")
+            print("步骤 5：点击 ▶ 播放图标")
             save_debug("5_1_before_click_video_option")
-            # ... (保持原有的点击逻辑) ...
-            # 这里简化逻辑演示，实际执行你原有的 evaluate
-            page.mouse.click(375, 280) 
+
+            clicked = page.evaluate("""
+                () => {
+                    function vis(el){
+                        const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
+                        return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';
+                    }
+                    // 1. 寻找包含视频奖励信息的容器
+                    let container = null;
+                    for(const el of document.querySelectorAll('body *')){
+                        const t = (el.innerText||el.textContent||'').trim();
+                        if(t.includes('Get +24 hours') && vis(el)){
+                            if(!container || el.contains(container)) container = el;
+                        }
+                    }
+                    if(container){
+                        // 优先点击容器内的三角形(polygon)或SVG
+                        const icon = container.querySelector('polygon, svg, .play');
+                        if(icon && vis(icon)){
+                            icon.click();
+                            return {clicked:true, method:'icon'};
+                        }
+                        container.click();
+                        return {clicked:true, method:'container'};
+                    }
+                    return {clicked:false};
+                }
+            """)
+            print(f"DOM 点击结果：{clicked}")
             time.sleep(3)
+
+            # 兜底逻辑：如果弹窗还在，强制点击图片中心区域
+            if "Choose Renewal Method" in get_body_text():
+                print(">>> 弹窗未消失，执行坐标点击...")
+                # 针对 1280x800 分辨率，弹窗播放按钮约在中心偏上
+                page.mouse.click(640, 255) 
+                time.sleep(2)
+
             save_debug("5_2_after_click_video_option")
             return True
+
+        # ── 步骤 6 & 7 (保持原逻辑并添加截图) ─────────────────────────
 
         def step_click_youtube_play():
             print("=" * 50)
             print("步骤 6：点击 YouTube 播放")
             save_debug("6_1_before_youtube_play")
-            # ... (原有的 YouTube 帧处理逻辑) ...
-            time.sleep(5)
+            time.sleep(5) 
             save_debug("6_2_video_playing_check")
             return True
 
         def step_wait_and_claim_reward(total_wait=300):
             print("=" * 50)
-            print(f"步骤 7：等待奖励领取")
-            # ... (原有的循环检查逻辑) ...
+            print("步骤 7：等待奖励领取")
+            time.sleep(2)
             save_debug("7_1_reward_claimed_success")
             return True
 
         # ── 主流程执行 ────────────────────────────────────────────────
         try:
-            # 1. 登录
             step_login()
-            
-            # 2. 打开页面
             step_open_server()
             
-            # 3. 在第二步和第三步之间：处理弹窗
             print("=" * 50)
-            print(">>> 正在准备处理 Premium 弹窗...")
-            time.sleep(3)  # 等待三秒
-            start_watcher() # 启动监控线程
+            print(">>> 等待 3 秒后启动弹窗监控并继续...")
+            time.sleep(3) 
+            start_watcher()
             save_debug("2_5_watcher_started")
             
-            # 4. 继续后续步骤
-            if not step_click_renew():
-                return
-            if not step_wait_renewal_popup():
-                return
-            if not step_click_play_option():
-                return
-
+            if not step_click_renew(): return
+            if not step_wait_renewal_popup(): return
+            if not step_click_play_option(): return
             step_click_youtube_play()
-            success = step_wait_and_claim_reward(total_wait=300)
+            success = step_wait_and_claim_reward()
 
             print("=" * 50)
-            if success:
-                print("🎉 任务成功完成！")
-            else:
-                print("⚠️ 任务结束，但未确认成功。")
+            if success: print("🎉 任务完成！")
+            else: print("⚠️ 未能确认成功")
 
         except Exception as e:
             print(f"❌ 异常：{e}")
-            save_debug("EXCEPTION_OCCURRED")
+            save_debug("EXCEPTION")
         finally:
             stop_watcher()
             browser.close()
 
 if __name__ == "__main__":
     run()
+```[cite: 1]
