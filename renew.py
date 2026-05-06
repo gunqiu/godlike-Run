@@ -20,6 +20,99 @@ def run():
         )
         page = context.new_page()
 
+        # ── 后台线程：持续侦测并关闭 Premium 弹窗 ────────────────────
+        _watcher_stop = threading.Event()
+
+        def _premium_watcher():
+            """
+            进入服务器页面后一直跑，每 2 秒检查一次。
+            只处理 "Do you love Godlike?" 这个弹窗，其他弹窗不管。
+            视频播放后也继续跑，直到主流程结束才停。
+            """
+            while not _watcher_stop.is_set():
+                try:
+                    body = page.locator("body").inner_text(timeout=1000)
+                    if "Do you love Godlike?" in body or "Claim -50% Off" in body:
+                        print("[watcher] 检测到 Premium 弹窗，正在关闭...")
+                        page.evaluate("""
+                            () => {
+                                function textOf(el){return(el.innerText||el.textContent||'').trim();}
+                                function vis(el){
+                                    const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
+                                    return r.width>0&&r.height>0&&r.top<window.innerHeight&&
+                                           s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
+                                }
+                                // 优先点 "I'm fine with waiting in the queue"
+                                for(const el of document.querySelectorAll('button,a,[role="button"],div,span')){
+                                    if(textOf(el).includes("I'm fine with waiting")&&vis(el)){
+                                        el.click(); return;
+                                    }
+                                }
+                                // 兜底：点右上角 X 按钮
+                                for(const el of document.querySelectorAll('button,[role="button"]')){
+                                    const t=textOf(el);
+                                    if((t==='×'||t==='✕'||t==='X'||t==='x'||t==='close')&&vis(el)){
+                                        el.click(); return;
+                                    }
+                                }
+                                // 固定坐标兜底（弹窗右上角约 x=700, y=100）
+                                // 注：evaluate 里无法用 page.mouse，只能 DOM
+                            }
+                        """)
+                        time.sleep(1.5)
+                        # 如果还在，用坐标点
+                        try:
+                            body2 = page.locator("body").inner_text(timeout=500)
+                            if "Do you love Godlike?" in body2:
+                                page.mouse.click(700, 100)
+                                time.sleep(1)
+                        except:
+                            pass
+                        print("[watcher] Premium 弹窗已处理")
+                except:
+                    pass
+                time.sleep(2)
+
+        def start_watcher():
+            t = threading.Thread(target=_premium_watcher, daemon=True)
+            t.start()
+            return t
+
+        def stop_watcher():
+            _watcher_stop.set()
+
+        # ── 工具函数 ──────────────────────────────────────────────────
+
+        def save_debug(name):
+            try:
+                page.screenshot(path=name, full_page=True)
+                print(f"[截图] {name}")
+            except Exception as e:
+                print(f"[截图失败] {name}: {e}")
+
+        def fail(step_name):
+            save_debug(f"FAIL_{step_name}.png")
+            print(f"❌ 失败于步骤：{step_name}")
+
+        def safe_goto(url, name):
+            print(f"打开 {name}...")
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                time.sleep(5)
+                return True
+            except PlaywrightTimeoutError:
+                time.sleep(5)
+                return True
+            except Exception as e:
+                print(f"打开失败：{e}")
+                time.sleep(5)
+                return False
+
+        def get_body_text():
+            try:
+                return page.locator("body").inner_text(timeout=1500)
+            except:
+                return ""
 
         # ── 步骤 1：登录 ──────────────────────────────────────────────
 
