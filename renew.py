@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 LOGIN_URL = "https://ultra.panel.godlike.host/login"
@@ -19,69 +20,6 @@ def run():
         )
         page = context.new_page()
 
-        def save_debug(name):
-            try:
-                page.screenshot(path=name, full_page=True)
-                print(f"[截图已保存] {name}")
-            except Exception as e:
-                print(f"[截图失败] {name}: {e}")
-
-        def fail(step_name):
-            """任务在某步失败时调用：截图并退出。"""
-            save_debug(f"FAIL_{step_name}.png")
-            print(f"❌ 任务失败于步骤：{step_name}")
-
-        def safe_goto(url, name):
-            print(f"打开 {name}...")
-            try:
-                page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                time.sleep(5)
-                return True
-            except PlaywrightTimeoutError:
-                time.sleep(5)
-                return True
-            except Exception as e:
-                print(f"打开失败：{e}")
-                time.sleep(5)
-                return False
-
-        def get_body_text():
-            try:
-                return page.locator("body").inner_text(timeout=1500)
-            except:
-                return ""
-
-        # ── Premium 弹窗（仅在 Renew 点击前可能出现）────────────────
-
-        def close_premium_popup():
-            body = get_body_text()
-            if "Do you love Godlike?" not in body and "Claim -50% Off" not in body:
-                return False
-            closed = page.evaluate("""
-                () => {
-                    function textOf(el){return(el.innerText||el.textContent||'').trim();}
-                    function vis(el){
-                        const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
-                        return r.width>0&&r.height>0&&r.top<window.innerHeight&&
-                               s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
-                    }
-                    for(const el of document.querySelectorAll('button,a,[role="button"],div,span')){
-                        if(textOf(el).includes("I'm fine with waiting")&&vis(el)){
-                            el.click();return true;
-                        }
-                    }
-                    return false;
-                }
-            """)
-            if closed:
-                time.sleep(1.5)
-                return True
-            try:
-                page.mouse.click(720, 100)
-                time.sleep(1)
-            except:
-                pass
-            return True
 
         # ── 步骤 1：登录 ──────────────────────────────────────────────
 
@@ -101,14 +39,15 @@ def run():
             page.wait_for_url(lambda url: "login" not in url, timeout=25000)
             print("✅ 登录成功")
 
-        # ── 步骤 2：打开服务器页面 ────────────────────────────────────
+        # ── 步骤 2：打开服务器页面（启动弹窗侦测）───────────────────
 
         def step_open_server():
             print("=" * 50)
-            print("步骤 2：打开服务器页面")
+            print("步骤 2：打开服务器页面，启动 Premium 弹窗侦测")
             safe_goto(SERVER_URL, "服务器管理页")
             time.sleep(3)
-            print("✅ 服务器页面已打开")
+            start_watcher()   # ← 进入服务器页面后立即启动后台侦测
+            print("✅ 服务器页面已打开，弹窗侦测已启动")
 
         # ── 步骤 3：点击 Renew ────────────────────────────────────────
 
@@ -117,7 +56,6 @@ def run():
             print("步骤 3：点击 Renew 按钮")
             start = time.time()
             while time.time() - start < max_seconds:
-                close_premium_popup()
                 result = page.evaluate("""
                     () => {
                         function vis(el){
@@ -245,7 +183,6 @@ def run():
                 print("✅ 视频页已打开")
                 return True
 
-            # 固定坐标兜底
             for x, y in [(375, 280), (375, 260), (375, 300), (380, 275), (370, 285)]:
                 print(f"固定坐标 ({x},{y})...")
                 page.mouse.click(x, y)
@@ -262,13 +199,12 @@ def run():
         def step_click_youtube_play():
             print("=" * 50)
             print("步骤 6：点击 YouTube 播放按钮")
-            time.sleep(3)  # 等页面稳定
+            time.sleep(3)
 
-            # iframe
             try:
                 for frame in page.frames:
                     if "youtube.com" in frame.url or "youtube-nocookie.com" in frame.url:
-                        print(f"找到 YouTube iframe")
+                        print("找到 YouTube iframe")
                         for sel in [".ytp-large-play-button", "button.ytp-play-button",
                                     "[aria-label='Play']", "[aria-label='play']"]:
                             try:
@@ -283,7 +219,6 @@ def run():
             except Exception as e:
                 print(f"iframe 失败：{e}")
 
-            # DOM
             clicked = page.evaluate("""
                 () => {
                     function vis(el){
@@ -310,11 +245,10 @@ def run():
                 }
             """)
             if clicked and clicked.get("ok"):
-                print(f"✅ DOM 播放已点击")
+                print("✅ DOM 播放已点击")
                 time.sleep(2)
                 return True
 
-            # 固定坐标
             for x, y in [(487, 262), (487, 245), (487, 275)]:
                 page.mouse.click(x, y)
                 time.sleep(2)
@@ -323,20 +257,15 @@ def run():
                            if(!v.paused&&v.currentTime>0) return true; return false;}
                 """)
                 if playing:
-                    print("✅ 视频播放中（坐标点击）")
+                    print("✅ 视频播放中")
                     return True
 
-            # 播放失败也不截图，继续等待（视频可能是自动播放的）
-            print("⚠️ 未确认播放，继续监控（可能已自动播放）")
+            print("⚠️ 未确认播放，继续监控")
             return True
 
         # ── 步骤 7：等待奖励弹窗并点击 ───────────────────────────────
 
         def step_wait_and_claim_reward(total_wait=300):
-            """
-            等待 240 秒视频播放完毕后出现的奖励弹窗，点击领取。
-            失败时才截图。
-            """
             print("=" * 50)
             print(f"步骤 7：等待奖励弹窗（最长 {total_wait} 秒）")
             start = time.time()
@@ -356,8 +285,7 @@ def run():
                               if kw in body and "Do you love Godlike?" not in body), None)
 
                 if found:
-                    print(f"[{int(elapsed)}s] ✅ 检测到奖励关键词：'{found}'")
-
+                    print(f"[{int(elapsed)}s] ✅ 奖励关键词：'{found}'")
                     clicked = page.evaluate("""
                         () => {
                             function textOf(el){return(el.innerText||el.textContent||'').trim();}
@@ -381,33 +309,28 @@ def run():
                             return{clicked:false};
                         }
                     """)
-                    print(f"奖励点击结果：{clicked}")
-
+                    print(f"奖励点击：{clicked}")
                     if clicked and clicked.get("clicked"):
-                        print("🎉 成功点击奖励按钮！")
+                        print("🎉 成功点击奖励！")
                         return True
-
-                    # 兜底坐标
                     for fx, fy in [(490, 430), (490, 450), (490, 410)]:
                         page.mouse.click(fx, fy)
                         time.sleep(1)
                     if not any(kw in get_body_text() for kw in reward_keywords):
-                        print("🎉 弹窗已消失，判断点击成功")
+                        print("🎉 弹窗消失，判断成功")
                         return True
-
-                    # 还在的话截图排查
                     fail("reward_click_failed")
                     return False
 
                 if int(elapsed) % 60 == 0 and elapsed > 0:
-                    print(f"[{int(elapsed)}s] 仍在等待奖励弹窗...")
+                    print(f"[{int(elapsed)}s] 等待奖励弹窗...")
 
                 time.sleep(2)
 
         # ── 主流程 ────────────────────────────────────────────────────
         try:
             step_login()
-            step_open_server()
+            step_open_server()   # 启动弹窗侦测线程
 
             if not step_click_renew():
                 return
@@ -427,9 +350,10 @@ def run():
                 print("⚠️ 任务未完成，请查看截图")
 
         except Exception as e:
-            print(f"❌ 未捕获异常：{e}")
+            print(f"❌ 异常：{e}")
             save_debug("FAIL_exception.png")
         finally:
+            stop_watcher()
             browser.close()
 
 
