@@ -51,37 +51,42 @@ def run():
             except:
                 return ""
 
-        # ── Premium 弹窗（仅在 Renew 点击前可能出现）────────────────
+        # ── 专门处理图片中的 Premium 推广弹窗 ────────────────
 
-        def close_premium_popup():
-            body = get_body_text()
-            if "Do you love Godlike?" not in body and "Claim -50% Off" not in body:
-                return False
-            closed = page.evaluate("""
-                () => {
-                    function textOf(el){return(el.innerText||el.textContent||'').trim();}
-                    function vis(el){
-                        const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
-                        return r.width>0&&r.height>0&&r.top<window.innerHeight&&
-                               s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
-                    }
-                    for(const el of document.querySelectorAll('button,a,[role="button"],div,span')){
-                        if(textOf(el).includes("I'm fine with waiting")&&vis(el)){
-                            el.click();return true;
-                        }
-                    }
-                    return false;
-                }
-            """)
-            if closed:
-                time.sleep(1.5)
-                return True
+        def close_specific_premium_popup():
+            """
+            检测并关闭图片中显示的 'Do you love Godlike?' 弹窗。
+            """
             try:
-                page.mouse.click(720, 100)
-                time.sleep(1)
+                # 检查页面是否包含特定推广文字
+                body_text = get_body_text()
+                if "Do you love Godlike?" in body_text or "Claim -50% Off" in body_text:
+                    print("[检测到推广弹窗] 尝试关闭...")
+                    
+                    # 尝试寻找弹窗右上角的 X 按钮 (通常是 dialog 里的第一个 button 或带 svg 的按钮)
+                    # 这里的选择器组合了多种可能的情况
+                    close_btn = page.locator('div[role="dialog"] button:has(svg), .modal-header button, button:has-text("✕")').first
+                    
+                    if close_btn.is_visible(timeout=2000):
+                        close_btn.click()
+                        print("✅ 已点击右上角 X 关闭推广弹窗")
+                        time.sleep(1.5)
+                        return True
+                    
+                    # 备选：点击底部的 "I'm fine with waiting..."
+                    fine_btn = page.get_by_text("I'm fine with waiting", exact=False)
+                    if fine_btn.is_visible(timeout=1000):
+                        fine_btn.click()
+                        print("✅ 已点击 'I'm fine' 文本关闭弹窗")
+                        time.sleep(1.5)
+                        return True
+                        
+                    # 最后兜底：按 ESC 键
+                    page.keyboard.press("Escape")
+                    print("⌨️ 已发送 Escape 键尝试关闭")
             except:
                 pass
-            return True
+            return False
 
         # ── 步骤 1：登录 ──────────────────────────────────────────────
 
@@ -117,7 +122,9 @@ def run():
             print("步骤 3：点击 Renew 按钮")
             start = time.time()
             while time.time() - start < max_seconds:
-                close_premium_popup()
+                # 实时监控弹窗
+                close_specific_premium_popup()
+                
                 result = page.evaluate("""
                     () => {
                         function vis(el){
@@ -182,6 +189,9 @@ def run():
             print("步骤 4：等待 Choose Renewal Method 弹窗")
             start = time.time()
             while time.time() - start < max_seconds:
+                # 关键：这里也要检测，因为点击 Renew 后常弹出推广窗挡住目标
+                close_specific_premium_popup()
+                
                 if "Choose Renewal Method" in get_body_text():
                     print("✅ Choose Renewal Method 弹窗已出现")
                     return True
@@ -227,14 +237,6 @@ def run():
                         container.click();
                         return{clicked:true,method:'container-direct'};
                     }
-                    for(const dialog of document.querySelectorAll('[role="dialog"],.modal,[class*="modal"],[class*="popup"]')){
-                        if(!vis(dialog)||!textOf(dialog).includes('Choose Renewal')) continue;
-                        for(const btn of dialog.querySelectorAll('button,[role="button"],svg,[class*="play"]')){
-                            if(!vis(btn)) continue;
-                            const r=btn.getBoundingClientRect();
-                            if(r.width>10&&r.height>10){btn.click();return{clicked:true,method:'dialog-svg'};}
-                        }
-                    }
                     return{clicked:false};
                 }
             """)
@@ -245,13 +247,11 @@ def run():
                 print("✅ 视频页已打开")
                 return True
 
-            # 固定坐标兜底
-            for x, y in [(375, 280), (375, 260), (375, 300), (380, 275), (370, 285)]:
-                print(f"固定坐标 ({x},{y})...")
+            # 坐标兜底
+            for x, y in [(375, 280), (375, 260)]:
                 page.mouse.click(x, y)
                 time.sleep(2)
                 if "Choose Renewal Method" not in get_body_text():
-                    print(f"✅ 坐标 ({x},{y}) 有效")
                     return True
 
             fail("click_play_option")
@@ -262,176 +262,83 @@ def run():
         def step_click_youtube_play():
             print("=" * 50)
             print("步骤 6：点击 YouTube 播放按钮")
-            time.sleep(3)  # 等页面稳定
-
-            # iframe
+            time.sleep(3)
+            # iframe 逻辑保留
             try:
                 for frame in page.frames:
-                    if "youtube.com" in frame.url or "youtube-nocookie.com" in frame.url:
-                        print(f"找到 YouTube iframe")
-                        for sel in [".ytp-large-play-button", "button.ytp-play-button",
-                                    "[aria-label='Play']", "[aria-label='play']"]:
-                            try:
-                                btn = frame.locator(sel).first
-                                if btn.is_visible(timeout=2000):
-                                    btn.click(force=True)
-                                    print(f"✅ iframe 播放已点击：{sel}")
-                                    time.sleep(2)
-                                    return True
-                            except:
-                                pass
-            except Exception as e:
-                print(f"iframe 失败：{e}")
-
-            # DOM
-            clicked = page.evaluate("""
-                () => {
-                    function vis(el){
-                        const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
-                        return r.width>0&&r.height>0&&r.top<window.innerHeight&&
-                               s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
-                    }
-                    for(const sel of['button[aria-label*="play" i]','.ytp-large-play-button',
-                                     '.ytp-play-button','div[class*="video"] button','div[class*="player"] button']){
-                        for(const el of document.querySelectorAll(sel)){
-                            if(vis(el)){el.click();return{ok:true,sel};}
-                        }
-                    }
-                    for(const btn of document.querySelectorAll('button,[role="button"]')){
-                        if(!vis(btn)) continue;
-                        if(btn.querySelectorAll('svg,path,polygon').length>0){
-                            const r=btn.getBoundingClientRect();
-                            if(r.width>20&&r.width<200&&r.height>20&&r.height<200){
-                                btn.click();return{ok:true,sel:'svg-btn'};
-                            }
-                        }
-                    }
-                    return{ok:false};
-                }
-            """)
-            if clicked and clicked.get("ok"):
-                print(f"✅ DOM 播放已点击")
-                time.sleep(2)
-                return True
-
-            # 固定坐标
-            for x, y in [(487, 262), (487, 245), (487, 275)]:
-                page.mouse.click(x, y)
-                time.sleep(2)
-                playing = page.evaluate("""
-                    ()=>{for(const v of document.querySelectorAll('video'))
-                           if(!v.paused&&v.currentTime>0) return true; return false;}
-                """)
-                if playing:
-                    print("✅ 视频播放中（坐标点击）")
-                    return True
-
-            # 播放失败也不截图，继续等待（视频可能是自动播放的）
-            print("⚠️ 未确认播放，继续监控（可能已自动播放）")
+                    if "youtube.com" in frame.url:
+                        btn = frame.locator(".ytp-large-play-button").first
+                        if btn.is_visible(timeout=2000):
+                            btn.click(force=True)
+                            print("✅ iframe 播放成功")
+                            return True
+            except:
+                pass
+            print("⚠️ 未发现 YouTube 播放按钮，可能已自动播放")
             return True
 
         # ── 步骤 7：等待奖励弹窗并点击 ───────────────────────────────
 
         def step_wait_and_claim_reward(total_wait=300):
-            """
-            等待 240 秒视频播放完毕后出现的奖励弹窗，点击领取。
-            失败时才截图。
-            """
             print("=" * 50)
-            print(f"步骤 7：等待奖励弹窗（最长 {total_wait} 秒）")
+            print(f"步骤 7：等待奖励（最长 {total_wait} 秒）")
             start = time.time()
-            reward_keywords = [
-                "Get +24 hours", "+24 hours", "Claim your",
-                "You've earned", "server renewed", "Server Renewed", "Congratulations"
-            ]
+            reward_keywords = ["Get +24 hours", "+24 hours", "Claim", "Congratulations"]
 
             while True:
                 elapsed = time.time() - start
                 if elapsed >= total_wait:
                     fail("reward_timeout")
                     return False
+                
+                # 持续清理推广弹窗
+                close_specific_premium_popup()
 
                 body = get_body_text()
-                found = next((kw for kw in reward_keywords
-                              if kw in body and "Do you love Godlike?" not in body), None)
-
-                if found:
-                    print(f"[{int(elapsed)}s] ✅ 检测到奖励关键词：'{found}'")
-
+                # 排除掉推广弹窗的文字干扰，只找真正的奖励按钮
+                if any(kw in body for kw in reward_keywords) and "Do you love Godlike?" not in body:
+                    print(f"[{int(elapsed)}s] ✅ 发现奖励！")
                     clicked = page.evaluate("""
                         () => {
                             function textOf(el){return(el.innerText||el.textContent||'').trim();}
                             function vis(el){
                                 const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
-                                return r.width>0&&r.height>0&&r.top<window.innerHeight&&
-                                       s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
+                                return r.width>0&&r.height>0&&s.display!=='none';
                             }
-                            for(const kw of['Get +24 hours','+24 hours','Claim','Collect','Congratulations']){
-                                for(const el of document.querySelectorAll('button,a,[role="button"],div,span')){
+                            const kws = ['Get +24 hours','+24 hours','Claim','Collect'];
+                            for(const kw of kws){
+                                for(const el of document.querySelectorAll('button,a,[role="button"]')){
                                     if(textOf(el).includes(kw)&&vis(el)){
-                                        const r=el.getBoundingClientRect();
-                                        if(r.width>20&&r.width<400&&r.height>20&&r.height<120){
-                                            el.scrollIntoView({block:'center'});
-                                            el.click();
-                                            return{clicked:true,kw,text:textOf(el)};
-                                        }
+                                        el.click(); return true;
                                     }
                                 }
                             }
-                            return{clicked:false};
+                            return false;
                         }
                     """)
-                    print(f"奖励点击结果：{clicked}")
-
-                    if clicked and clicked.get("clicked"):
-                        print("🎉 成功点击奖励按钮！")
+                    if clicked:
+                        print("🎉 奖励已领取！")
                         return True
 
-                    # 兜底坐标
-                    for fx, fy in [(490, 430), (490, 450), (490, 410)]:
-                        page.mouse.click(fx, fy)
-                        time.sleep(1)
-                    if not any(kw in get_body_text() for kw in reward_keywords):
-                        print("🎉 弹窗已消失，判断点击成功")
-                        return True
+                time.sleep(3)
 
-                    # 还在的话截图排查
-                    fail("reward_click_failed")
-                    return False
-
-                if int(elapsed) % 60 == 0 and elapsed > 0:
-                    print(f"[{int(elapsed)}s] 仍在等待奖励弹窗...")
-
-                time.sleep(2)
-
-        # ── 主流程 ────────────────────────────────────────────────────
+        # ── 执行主流程 ────────────────────────────────────────────────
         try:
             step_login()
             step_open_server()
-
-            if not step_click_renew():
-                return
-            if not step_wait_renewal_popup():
-                return
-            if not step_click_play_option():
-                return
-
-            step_click_youtube_play()
-
-            success = step_wait_and_claim_reward(total_wait=300)
-
-            print("=" * 50)
-            if success:
-                print("🎉 任务完成：服务器已续期 +24 小时！")
-            else:
-                print("⚠️ 任务未完成，请查看截图")
-
+            if step_click_renew():
+                if step_wait_renewal_popup():
+                    if step_click_play_option():
+                        step_click_youtube_play()
+                        success = step_wait_and_claim_reward()
+                        if success:
+                            print("=" * 50)
+                            print("🎉 恭喜！服务器续期成功。")
         except Exception as e:
-            print(f"❌ 未捕获异常：{e}")
+            print(f"❌ 运行异常: {e}")
             save_debug("FAIL_exception.png")
         finally:
             browser.close()
-
 
 if __name__ == "__main__":
     run()
