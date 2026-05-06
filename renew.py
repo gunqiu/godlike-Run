@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 LOGIN_URL = "https://panel.godlike.host/auth/login"
 SERVER_URL = "https://ultra.panel.godlike.host/server/f5b2e253"
-
+ 
 def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
