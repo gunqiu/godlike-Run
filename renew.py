@@ -11,7 +11,8 @@ def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True
-            # 如果想看浏览器操作，把上面改成 headless=False
+            # 如果想看浏览器操作，可以改成：
+            # headless=False,
             # slow_mo=300
         )
 
@@ -33,10 +34,9 @@ def run():
             except Exception as e:
                 print(f"保存截图失败：{e}")
 
-        def safe_goto(url, name="页面"):
+        def safe_goto(url, name):
             """
-            重要修复：
-            不再使用 networkidle，因为这个网站会一直有后台请求，容易超时。
+            不使用 networkidle，避免网站一直有后台请求导致超时。
             """
             print(f"正在打开{name}：{url}")
 
@@ -46,7 +46,7 @@ def run():
                 print(f"{name}已打开")
                 return True
             except PlaywrightTimeoutError:
-                print(f"{name}打开超时，但继续执行，因为页面可能已经加载出来")
+                print(f"{name}打开超时，但页面可能已经出来了，继续执行")
                 time.sleep(5)
                 return True
             except Exception as e:
@@ -54,339 +54,306 @@ def run():
                 time.sleep(5)
                 return False
 
-        def close_premium_popup():
+        def close_premium_popup_only():
             """
-            关闭中间的 50% Premium 弹窗。
-            注意：这版不强制删除网页元素，避免把正常页面删坏。
+            只处理中间大的 Premium 50% 弹窗。
+            不再处理左下角问卷。
             """
-            print("尝试关闭 Premium 弹窗...")
-
-            time.sleep(1)
-
-            # 先尝试点右上角 X
-            # 根据你的截图，X 大约在 905,128
-            try:
-                page.mouse.click(905, 128)
-                print("已尝试点击 Premium 弹窗 X")
-                time.sleep(1)
-            except Exception as e:
-                print(f"点击 Premium X 失败：{e}")
-
-            # 再尝试点底部 I'm fine...
-            # 根据你的截图，文字大约在 640,615
-            try:
-                page.mouse.click(640, 615)
-                print("已尝试点击 I'm fine 文字")
-                time.sleep(1)
-            except Exception as e:
-                print(f"点击 I'm fine 失败：{e}")
-
-            # 再按 ESC
-            try:
-                page.keyboard.press("Escape")
-                print("已按 ESC")
-                time.sleep(1)
-            except Exception as e:
-                print(f"ESC 失败：{e}")
-
-        def close_survey_popup():
-            """
-            关闭左下角问卷弹窗。
-            你 final_debug.png 里面左下角出现了 recommend us 小问卷。
-            """
-            print("尝试关闭左下角问卷弹窗...")
-
-            # 根据截图，问卷右上角 X 大概在 x=210, y=375 附近
-            points = [
-                (210, 375),
-                (205, 370),
-                (215, 380),
-            ]
-
-            for x, y in points:
-                try:
-                    page.mouse.click(x, y)
-                    print(f"已尝试点击问卷关闭按钮：{x},{y}")
-                    time.sleep(0.5)
-                except:
-                    pass
-
-        def click_overview():
-            """
-            确保在 Overview 页面。
-            """
-            print("尝试回到 Overview 页面...")
-
-            # 左侧 Overview 菜单坐标
-            try:
-                page.mouse.click(70, 145)
-                time.sleep(2)
-            except:
-                pass
-
-            # 上方 Overview 标签坐标
-            try:
-                page.mouse.click(195, 165)
-                time.sleep(2)
-            except:
-                pass
-
-            close_premium_popup()
-            close_survey_popup()
-
-        def click_renew_button():
-            """
-            重点修复：点击 Renew 按钮。
-            根据你的截图，真正按钮中心大约在 190,435。
-            之前点 188,415 偏上，可能点到了 FREE 标签附近。
-            """
-            print("准备点击 Renew 按钮...")
-
-            close_premium_popup()
-            close_survey_popup()
-
-            save_debug("before_click_renew.png")
-
-            # 方法 1：直接用最准确的截图坐标
-            # 从你最新截图看，Renew 按钮中心大约是 x=190, y=435
-            fixed_points = [
-                (190, 435),
-                (195, 435),
-                (185, 435),
-                (190, 430),
-                (200, 435),
-                (190, 440),
-            ]
-
-            for x, y in fixed_points:
-                try:
-                    print(f"尝试固定坐标点击 Renew：x={x}, y={y}")
-                    page.mouse.move(x, y)
-                    time.sleep(0.3)
-                    page.mouse.down()
-                    time.sleep(0.2)
-                    page.mouse.up()
-                    time.sleep(4)
-
-                    save_debug(f"after_click_renew_fixed_{x}_{y}.png")
-
-                    # 点击后尝试处理可能弹出的广告/弹窗
-                    close_premium_popup()
-                    close_survey_popup()
-
-                    return True
-                except Exception as e:
-                    print(f"固定坐标点击 Renew 失败：{x},{y}，错误：{e}")
-
-            # 方法 2：用 JS 在这个坐标上触发点击
             try:
                 result = page.evaluate(
                     """
                     () => {
-                        const points = [
-                            [190, 435],
-                            [195, 435],
-                            [185, 435],
-                            [190, 430],
-                            [200, 435],
-                            [190, 440]
-                        ];
+                        const text = document.body.innerText || '';
 
-                        for (const [x, y] of points) {
-                            const el = document.elementFromPoint(x, y);
+                        if (
+                            !text.includes('Do you love Godlike?') &&
+                            !text.includes('Claim -50% Off') &&
+                            !text.includes("I'm fine with waiting in the queue")
+                        ) {
+                            return {
+                                found: false,
+                                action: '没有 Premium 大弹窗'
+                            };
+                        }
 
-                            if (el) {
-                                el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: x, clientY: y }));
-                                el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }));
-                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
-                                el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
-                                el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+                        // 优先点击右上角 X，按照当前截图位置
+                        const x = 905;
+                        const y = 128;
+                        const el = document.elementFromPoint(x, y);
 
-                                return {
-                                    clicked: true,
-                                    x,
-                                    y,
-                                    tag: el.tagName,
-                                    text: el.innerText || el.textContent || '',
-                                    className: String(el.className || '')
-                                };
-                            }
+                        if (el) {
+                            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
+                            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
+                            el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+
+                            return {
+                                found: true,
+                                action: '已点击 Premium X',
+                                tag: el.tagName,
+                                text: el.innerText || el.textContent || ''
+                            };
                         }
 
                         return {
-                            clicked: false,
-                            reason: '坐标上没有元素'
+                            found: true,
+                            action: '发现 Premium 大弹窗，但没有点到 X'
                         };
                     }
                     """
                 )
 
-                print(f"JS 坐标点击 Renew 结果：{result}")
-                time.sleep(4)
-                save_debug("after_click_renew_by_js_point.png")
+                print(f"Premium 弹窗检测结果：{result}")
+                time.sleep(1)
+            except Exception as e:
+                print(f"关闭 Premium 弹窗失败：{e}")
 
-                if result and result.get("clicked"):
+            try:
+                page.keyboard.press("Escape")
+                time.sleep(0.5)
+            except:
+                pass
+
+        def find_renew_button_info():
+            """
+            检测 Renew 按钮是否存在、是否可见、是否被遮挡。
+            重点：只找 Renew Server 卡片里的 Renew，不找其他页面元素。
+            """
+            try:
+                result = page.evaluate(
+                    """
+                    () => {
+                        function isVisible(el) {
+                            if (!el) return false;
+
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+
+                            return (
+                                rect.width > 0 &&
+                                rect.height > 0 &&
+                                rect.bottom > 0 &&
+                                rect.right > 0 &&
+                                rect.top < window.innerHeight &&
+                                rect.left < window.innerWidth &&
+                                style.display !== 'none' &&
+                                style.visibility !== 'hidden' &&
+                                style.opacity !== '0'
+                            );
+                        }
+
+                        function textOf(el) {
+                            return (el.innerText || el.textContent || '').trim();
+                        }
+
+                        function findClickable(el) {
+                            let node = el;
+
+                            for (let i = 0; i < 8 && node && node !== document.body; i++) {
+                                const tag = node.tagName ? node.tagName.toLowerCase() : '';
+                                const role = node.getAttribute ? node.getAttribute('role') : '';
+                                const style = window.getComputedStyle(node);
+
+                                if (
+                                    tag === 'button' ||
+                                    tag === 'a' ||
+                                    role === 'button' ||
+                                    style.cursor === 'pointer' ||
+                                    typeof node.onclick === 'function'
+                                ) {
+                                    return node;
+                                }
+
+                                node = node.parentElement;
+                            }
+
+                            return el;
+                        }
+
+                        const all = Array.from(document.querySelectorAll('body *'));
+
+                        // 第一步：找 Renew Server 卡片
+                        let renewTitle = null;
+
+                        for (const el of all) {
+                            const text = textOf(el);
+
+                            if (text === 'Renew Server' && isVisible(el)) {
+                                renewTitle = el;
+                                break;
+                            }
+                        }
+
+                        if (!renewTitle) {
+                            return {
+                                found: false,
+                                reason: '没有找到 Renew Server 标题'
+                            };
+                        }
+
+                        let card = renewTitle;
+
+                        for (let i = 0; i < 10 && card && card !== document.body; i++) {
+                            const rect = card.getBoundingClientRect();
+                            const text = textOf(card);
+
+                            if (
+                                text.includes('Renew Server') &&
+                                text.includes('free server will be suspended') &&
+                                rect.width >= 180 &&
+                                rect.height >= 80 &&
+                                rect.width <= 500 &&
+                                rect.height <= 250
+                            ) {
+                                break;
+                            }
+
+                            card = card.parentElement;
+                        }
+
+                        if (!card || card === document.body) {
+                            return {
+                                found: false,
+                                reason: '没有找到 Renew Server 卡片'
+                            };
+                        }
+
+                        const cardRect = card.getBoundingClientRect();
+
+                        // 第二步：优先在卡片里面找文字等于 Renew 的按钮
+                        const inside = Array.from(card.querySelectorAll('button, a, [role="button"], div, span'));
+
+                        for (const el of inside) {
+                            const text = textOf(el);
+
+                            if (text === 'Renew' && isVisible(el)) {
+                                const clickable = findClickable(el);
+                                const rect = clickable.getBoundingClientRect();
+
+                                const x = rect.x + rect.width / 2;
+                                const y = rect.y + rect.height / 2;
+
+                                const topEl = document.elementFromPoint(x, y);
+
+                                const notCovered =
+                                    topEl &&
+                                    (
+                                        topEl === clickable ||
+                                        clickable.contains(topEl) ||
+                                        topEl.contains(clickable)
+                                    );
+
+                                return {
+                                    found: true,
+                                    method: 'text Renew',
+                                    x,
+                                    y,
+                                    width: rect.width,
+                                    height: rect.height,
+                                    notCovered,
+                                    topTag: topEl ? topEl.tagName : null,
+                                    topText: topEl ? textOf(topEl) : null,
+                                    buttonText: textOf(clickable)
+                                };
+                            }
+                        }
+
+                        // 第三步：如果文字找不到，就根据 Renew Server 卡片位置计算按钮中心
+                        // 从截图看，Renew 按钮在卡片左下区域
+                        const x = cardRect.x + 52;
+                        const y = cardRect.y + cardRect.height - 34;
+
+                        const topEl = document.elementFromPoint(x, y);
+                        const topText = topEl ? textOf(topEl) : '';
+
+                        const looksLikeRenew =
+                            topEl &&
+                            (
+                                topText.includes('Renew') ||
+                                textOf(card).includes('Renew Server')
+                            );
+
+                        return {
+                            found: true,
+                            method: 'card coordinate',
+                            x,
+                            y,
+                            width: 80,
+                            height: 40,
+                            notCovered: looksLikeRenew,
+                            topTag: topEl ? topEl.tagName : null,
+                            topText,
+                            cardText: textOf(card)
+                        };
+                    }
+                    """
+                )
+
+                return result
+            except Exception as e:
+                return {
+                    "found": False,
+                    "reason": f"JS 检测 Renew 异常：{e}"
+                }
+
+        def click_renew_when_not_blocked(max_wait_seconds=90):
+            """
+            检测当前画面。
+            只要 Renew 按钮没被挡住，就点击。
+            最多等待 90 秒，不会无限跑十几分钟。
+            """
+            print("开始检测 Renew 按钮是否可点击...")
+
+            start = time.time()
+            last_print = 0
+
+            while time.time() - start < max_wait_seconds:
+                info = find_renew_button_info()
+
+                now = time.time()
+                if now - last_print > 3:
+                    print(f"Renew 检测结果：{info}")
+                    last_print = now
+
+                if info.get("found") and info.get("notCovered"):
+                    x = info["x"]
+                    y = info["y"]
+
+                    print(f"Renew 按钮没有被挡住，准备点击：x={x}, y={y}")
+
+                    page.mouse.move(x, y)
+                    time.sleep(0.2)
+                    page.mouse.down()
+                    time.sleep(0.2)
+                    page.mouse.up()
+
+                    time.sleep(5)
+
+                    save_debug("after_click_renew.png")
+
+                    print("已经点击 Renew")
                     return True
 
-            except Exception as e:
-                print(f"JS 坐标点击 Renew 失败：{e}")
-
-            # 方法 3：根据 Renew Server 卡片文字定位
-            try:
-                print("尝试根据 Renew Server 文字定位按钮...")
-
-                renew_title = page.get_by_text("Renew Server", exact=True)
-
-                if renew_title.is_visible(timeout=3000):
-                    box = renew_title.bounding_box(timeout=3000)
-
-                    if box:
-                        print(f"找到 Renew Server 标题：{box}")
-
-                        # 根据截图：标题下方约 52-62 像素处是按钮中心
-                        x = box["x"] + 30
-                        y = box["y"] + 60
-
-                        print(f"根据标题点击 Renew：x={x}, y={y}")
-                        page.mouse.click(x, y)
-
-                        time.sleep(4)
-                        save_debug("after_click_renew_by_title.png")
-                        return True
-
-            except Exception as e:
-                print(f"根据 Renew Server 定位失败：{e}")
-
-            print("Renew 按钮点击失败")
-            return False
-
-        def click_possible_confirm_or_watch_button():
-            """
-            点击 Renew 后，可能会出现确认按钮、Watch Ad、Start、Claim 之类按钮。
-            这个函数尝试找这些按钮。
-            """
-            print("尝试寻找 Renew 后出现的确认/广告按钮...")
-
-            close_premium_popup()
-            close_survey_popup()
-
-            possible_words = [
-                "Watch",
-                "watch",
-                "Ad",
-                "ad",
-                "Start",
-                "start",
-                "Continue",
-                "continue",
-                "Confirm",
-                "confirm",
-                "Renew",
-                "renew",
-                "Claim",
-                "claim",
-                "Get",
-                "get"
-            ]
-
-            for word in possible_words:
+                # 如果是 Premium 大弹窗挡住，就只关 Premium 大弹窗
+                body_text = ""
                 try:
-                    loc = page.get_by_text(word, exact=False)
-                    count = loc.count()
-
-                    for i in range(count):
-                        item = loc.nth(i)
-
-                        try:
-                            if item.is_visible(timeout=1000):
-                                box = item.bounding_box(timeout=1000)
-
-                                if box:
-                                    x = box["x"] + box["width"] / 2
-                                    y = box["y"] + box["height"] / 2
-
-                                    # 避免点击 Upgrade Plan 和 Boost My Server
-                                    if y < 170:
-                                        continue
-
-                                    print(f"发现可能按钮文字：{word}，点击坐标：x={x}, y={y}")
-                                    page.mouse.click(x, y)
-                                    time.sleep(4)
-                                    save_debug(f"after_click_possible_{word}_{i}.png")
-                                    return True
-                        except:
-                            pass
-
+                    body_text = page.locator("body").inner_text(timeout=1000)
                 except:
                     pass
 
-            # 兜底：点击右侧中间区域，可能是广告区域
-            possible_points = [
-                (640, 430),
-                (650, 400),
-                (700, 430),
-                (600, 430),
-                (640, 500),
-            ]
+                if (
+                    "Do you love Godlike?" in body_text or
+                    "Claim -50% Off" in body_text or
+                    "I'm fine with waiting in the queue" in body_text
+                ):
+                    print("检测到 Premium 大弹窗，尝试关闭")
+                    close_premium_popup_only()
+                else:
+                    print("Renew 还不能点击，等待 1 秒后再检测")
 
-            for x, y in possible_points:
-                try:
-                    print(f"尝试点击可能的视频/广告区域：{x},{y}")
-                    page.mouse.click(x, y)
-                    time.sleep(3)
-                except:
-                    pass
+                time.sleep(1)
 
-            return False
-
-        def click_get_button_if_exists():
-            """
-            检查是否出现领取按钮。
-            """
-            print("检查是否出现领取按钮...")
-
-            close_premium_popup()
-            close_survey_popup()
-
-            possible_texts = [
-                "Get",
-                "Claim",
-                "Collect",
-                "Reward",
-                "hour",
-                "hours"
-            ]
-
-            for text in possible_texts:
-                try:
-                    loc = page.get_by_text(text, exact=False)
-                    count = loc.count()
-
-                    for i in range(count):
-                        item = loc.nth(i)
-
-                        try:
-                            if item.is_visible(timeout=1000):
-                                box = item.bounding_box(timeout=1000)
-
-                                if box:
-                                    x = box["x"] + box["width"] / 2
-                                    y = box["y"] + box["height"] / 2
-
-                                    # 避免点到无关顶部区域
-                                    if y < 170:
-                                        continue
-
-                                    print(f"检测到领取相关文字：{text}，点击：x={x}, y={y}")
-                                    page.mouse.click(x, y)
-                                    time.sleep(5)
-                                    return True
-                        except:
-                            pass
-
-                except:
-                    pass
-
+            print("等待 Renew 可点击超时，没有点击成功")
+            save_debug("renew_not_clicked_timeout.png")
             return False
 
         try:
@@ -397,11 +364,12 @@ def run():
 
             try:
                 login_switch = page.get_by_text("Through Login/Password")
+
                 if login_switch.is_visible(timeout=3000):
                     login_switch.click(force=True)
                     print("已切换到账号密码登录")
             except:
-                print("没有看到 Through Login/Password，继续尝试登录")
+                print("没有看到 Through Login/Password，继续登录")
 
             page.locator('input[type="email"]').first.fill(os.environ["GODLIKE_EMAIL"])
             page.locator('input[type="password"]').first.fill(os.environ["GODLIKE_PASSWORD"])
@@ -412,62 +380,22 @@ def run():
 
             print("登录成功！")
 
-            # 2. 打开服务器页
+            # 2. 打开服务器页面
             print("前往管理页...")
 
             safe_goto(SERVER_URL, "服务器管理页")
 
+            time.sleep(3)
+
             save_debug("after_server_page.png")
 
-            # 3. 回到 Overview
-            click_overview()
+            # 3. 只检测 Renew 按钮，不乱点别的
+            clicked = click_renew_when_not_blocked(max_wait_seconds=90)
 
-            save_debug("after_back_to_overview.png")
-
-            # 4. 点击 Renew
-            renew_clicked = click_renew_button()
-
-            if not renew_clicked:
-                print("Renew 没有点击成功，保存 renew_click_failed.png")
-                save_debug("renew_click_failed.png")
-                return
-
-            print("已尝试点击 Renew，等待页面反应...")
-
-            time.sleep(6)
-
-            close_premium_popup()
-            close_survey_popup()
-
-            save_debug("after_renew_click.png")
-
-            # 5. 点击可能出现的确认/广告按钮
-            click_possible_confirm_or_watch_button()
-
-            save_debug("after_try_confirm_or_watch.png")
-
-            # 6. 等待并点击领取按钮
-            print("开始监听领取按钮...")
-
-            found = False
-
-            for i in range(45):
-                if click_get_button_if_exists():
-                    print("【成功】检测到并点击领取按钮")
-                    save_debug("success_final.png")
-                    found = True
-                    break
-
-                # 每几轮再尝试点一下可能的确认/广告区域
-                if i % 5 == 0:
-                    click_possible_confirm_or_watch_button()
-
-                print(f"等待视频/领取按钮中... 第 {i + 1} 次检测")
-                time.sleep(10)
-
-            if not found:
-                print("没有找到领取按钮，保存 final_debug.png")
-                save_debug("final_debug.png")
+            if clicked:
+                print("任务完成：Renew 已点击")
+            else:
+                print("任务失败：没有点击到 Renew")
 
         except Exception as e:
             print(f"异常：{e}")
