@@ -382,6 +382,231 @@ def run():
             save_debug("watch_video_option_click_failed.png")
             return False
 
+        # ──────────────────────────────────────────────────────────────
+        # 以下为新增部分
+        # ──────────────────────────────────────────────────────────────
+
+        def click_youtube_play_button():
+            """
+            进入 Watch Video to Renew 页面后，点击 YouTube 播放器中间的红色播放按钮。
+            策略：先找 iframe，再在 iframe 内点击播放按钮；找不到就用固定坐标兜底。
+            """
+            print("尝试点击 YouTube 播放器中间的红色播放按钮...")
+            save_debug("before_click_youtube_play.png")
+
+            # ── 策略 1：通过 DOM 找 YouTube iframe，在 iframe 内点击播放按钮 ──
+            try:
+                # 找到页面内的 YouTube iframe
+                yt_frame = None
+                for frame in page.frames:
+                    if "youtube.com" in frame.url or "youtube-nocookie.com" in frame.url:
+                        yt_frame = frame
+                        break
+
+                if yt_frame:
+                    print(f"找到 YouTube iframe：{yt_frame.url}")
+                    # 尝试点击大播放按钮（.ytp-large-play-button 或 .ytp-play-button）
+                    for selector in [
+                        ".ytp-large-play-button",
+                        "button.ytp-play-button",
+                        "[aria-label='Play']",
+                        ".ytp-cued-thumbnail-overlay-image",
+                    ]:
+                        try:
+                            btn = yt_frame.locator(selector).first
+                            if btn.is_visible(timeout=3000):
+                                btn.click(force=True)
+                                print(f"通过 iframe selector '{selector}' 点击了播放按钮")
+                                time.sleep(3)
+                                save_debug("after_click_youtube_play_iframe.png")
+                                return True
+                        except:
+                            pass
+            except Exception as e:
+                print(f"iframe 内点击播放失败：{e}")
+
+            # ── 策略 2：固定坐标兜底（视频播放器通常居中显示） ──
+            # 根据 1280×800 的视口，YouTube 播放器大约在弹窗正中央
+            fallback_points = [
+                (480, 400),
+                (480, 380),
+                (480, 420),
+                (500, 400),
+            ]
+            for idx, (x, y) in enumerate(fallback_points):
+                print(f"固定坐标点击 YouTube 播放按钮 第{idx+1}次：x={x}, y={y}")
+                try:
+                    page.mouse.click(x, y)
+                    time.sleep(3)
+                    save_debug(f"after_click_youtube_play_fixed_{idx+1}.png")
+
+                    # 检测视频是否已经开始播放（iframe 的 paused 属性）
+                    is_playing = page.evaluate(
+                        """
+                        () => {
+                            const videos = document.querySelectorAll('video');
+                            for (const v of videos) {
+                                if (!v.paused && v.currentTime > 0) return true;
+                            }
+                            // 检查 iframe 内的 video（同域限制，可能拿不到，忽略报错）
+                            try {
+                                const iframes = document.querySelectorAll('iframe');
+                                for (const f of iframes) {
+                                    const doc = f.contentDocument || f.contentWindow.document;
+                                    const vids = doc.querySelectorAll('video');
+                                    for (const v of vids) {
+                                        if (!v.paused && v.currentTime > 0) return true;
+                                    }
+                                }
+                            } catch(e) {}
+                            return false;
+                        }
+                        """
+                    )
+                    if is_playing:
+                        print("检测到视频已开始播放")
+                        return True
+                except Exception as e:
+                    print(f"固定坐标点击失败：{e}")
+
+            # 即使无法确认是否播放，也返回 True 继续流程
+            print("无法确认视频是否播放，继续后续流程")
+            return True
+
+        def watch_video_and_wait_for_reward(total_wait=270):
+            """
+            在视频播放过程中持续监控页面，
+            在 240~260 秒之间出现 "Get +24 hours" 弹窗时立即点击。
+            total_wait：最长等待秒数（留出 10 秒余量）。
+            返回 True 表示成功点击了奖励按钮。
+            """
+            print(f"开始监控视频播放，最长等待 {total_wait} 秒...")
+            start = time.time()
+            reward_clicked = False
+
+            while True:
+                elapsed = time.time() - start
+                remaining = total_wait - elapsed
+
+                if remaining <= 0:
+                    print(f"已等待 {total_wait} 秒，未检测到奖励弹窗，退出监控")
+                    break
+
+                # 每隔 5 秒截一次图（仅在关键时间段附近）
+                if 230 <= elapsed <= 270 and int(elapsed) % 10 == 0:
+                    save_debug(f"watch_progress_{int(elapsed)}s.png")
+
+                try:
+                    body_text = page.locator("body").inner_text(timeout=1000)
+                except:
+                    body_text = ""
+
+                # ── 检测奖励弹窗 ──
+                # 关键词：根据实际弹窗文字调整，常见有：
+                # "Get +24 hours" / "+24 hours" / "Claim" / "You've earned"
+                reward_keywords = [
+                    "Get +24 hours",
+                    "+24 hours",
+                    "Claim your",
+                    "You've earned",
+                    "server renewed",
+                    "Server Renewed",
+                ]
+                found_keyword = next(
+                    (kw for kw in reward_keywords if kw in body_text), None
+                )
+
+                if found_keyword:
+                    print(f"[{int(elapsed)}s] 检测到奖励弹窗关键词：'{found_keyword}'")
+                    save_debug(f"reward_popup_detected_{int(elapsed)}s.png")
+
+                    # 尝试通过 DOM 找并点击按钮
+                    clicked = page.evaluate(
+                        """
+                        () => {
+                            function textOf(el) {
+                                return (el.innerText || el.textContent || '').trim();
+                            }
+                            function isVisible(el) {
+                                if (!el) return false;
+                                const rect = el.getBoundingClientRect();
+                                const style = window.getComputedStyle(el);
+                                return (
+                                    rect.width > 0 && rect.height > 0 &&
+                                    rect.top < window.innerHeight && rect.left < window.innerWidth &&
+                                    style.display !== 'none' &&
+                                    style.visibility !== 'hidden' &&
+                                    style.opacity !== '0'
+                                );
+                            }
+
+                            const keywords = ['Get +24 hours', '+24 hours', 'Claim', 'Collect'];
+                            const all = Array.from(document.querySelectorAll(
+                                'button, a, [role="button"], div, span'
+                            ));
+
+                            for (const kw of keywords) {
+                                for (const el of all) {
+                                    if (textOf(el).includes(kw) && isVisible(el)) {
+                                        const rect = el.getBoundingClientRect();
+                                        // 排除太大的容器元素，只取按钮级别
+                                        if (rect.width > 20 && rect.width < 400 &&
+                                            rect.height > 20 && rect.height < 120) {
+                                            el.scrollIntoView({ block: 'center' });
+                                            el.click();
+                                            return {
+                                                clicked: true,
+                                                keyword: kw,
+                                                text: textOf(el),
+                                                x: rect.x + rect.width / 2,
+                                                y: rect.y + rect.height / 2
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+                            return { clicked: false };
+                        }
+                        """
+                    )
+
+                    print(f"奖励按钮点击结果：{clicked}")
+
+                    if clicked and clicked.get("clicked"):
+                        print("成功点击了奖励按钮！")
+                        save_debug("reward_clicked_success.png")
+                        reward_clicked = True
+                        break
+                    else:
+                        # DOM 没找到，用固定坐标兜底（弹窗通常居中）
+                        print("DOM 未找到按钮，尝试固定坐标点击弹窗中央...")
+                        for fx, fy in [(480, 430), (480, 450), (480, 410)]:
+                            page.mouse.click(fx, fy)
+                            time.sleep(1)
+                            save_debug(f"reward_fixed_click_{fx}_{fy}.png")
+
+                            try:
+                                body_after = page.locator("body").inner_text(timeout=1000)
+                            except:
+                                body_after = ""
+
+                            # 如果弹窗消失了，说明点击成功
+                            if not any(kw in body_after for kw in reward_keywords):
+                                print("弹窗已消失，判断为点击成功")
+                                reward_clicked = True
+                                break
+
+                        if reward_clicked:
+                            save_debug("reward_clicked_success.png")
+                            break
+
+                time.sleep(2)
+
+            if not reward_clicked:
+                save_debug("reward_not_clicked.png")
+
+            return reward_clicked
+
         try:
             # 1. 登录
             print("正在登录...")
@@ -427,20 +652,28 @@ def run():
                 print("任务失败：点击 Renew 后没有弹出 Choose Renewal Method")
                 return
 
-            # 5. 点击 Get +24 hours by watching video
+            # 5. 点击 Get +24 hours by watching video（进入视频页）
             if not click_watch_video_option_until_video_panel():
                 print("任务失败：没有进入 Watch Video to Renew 页面")
                 return
 
-            print("已到达 Watch Video to Renew 页面。")
-            print("")
-            print("如果要人工操作，把 browser 启动参数改成 headless=False。")
+            print("已到达 Watch Video to Renew 页面，等待 3 秒后点击播放按钮...")
+            time.sleep(3)
 
-            # 保存最终截图
-            save_debug("final_manual_step.png")
+            # 6. 点击 YouTube 播放器中间的红色播放按钮
+            click_youtube_play_button()
 
-            # 如果你改成 headless=False，可以把下面这行取消注释，让窗口停留 10 分钟方便你手动点
-            # time.sleep(600)
+            print("播放按钮已点击，开始监控奖励弹窗（视频约需 240 秒）...")
+
+            # 7. 监控视频播放，在 240~260 秒之间点击弹窗中的 Get +24 hours
+            success = watch_video_and_wait_for_reward(total_wait=270)
+
+            if success:
+                print("任务完成：已成功点击奖励按钮，服务器续期 +24 小时！")
+            else:
+                print("任务警告：未能确认点击奖励按钮，请检查截图排查原因")
+
+            save_debug("final_state.png")
 
         except Exception as e:
             print(f"异常：{e}")
