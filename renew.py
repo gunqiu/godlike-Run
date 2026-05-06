@@ -11,7 +11,7 @@ def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True
-            # 如果想看浏览器操作，可以改成：
+            # 如果你想人工接着操作，可以改成：
             # headless=False,
             # slow_mo=300
         )
@@ -90,8 +90,8 @@ def run():
 
         def find_and_click_renew():
             """
-            只找 Renew Server 卡片里的 Renew 按钮。
-            现在这部分已经成功了，保持不动。
+            找 Renew Server 卡片里的 Renew 按钮。
+            这一段保留，因为你现在已经成功点到了 Renew。
             """
             print("开始寻找 Renew 按钮...")
 
@@ -268,52 +268,6 @@ def run():
                         };
                     }
 
-                    const fallbackPoints = [
-                        {
-                            x: cardRect.x + 62,
-                            y: cardRect.y + cardRect.height - 36
-                        },
-                        {
-                            x: cardRect.x + 55,
-                            y: cardRect.y + cardRect.height - 42
-                        },
-                        {
-                            x: cardRect.x + 70,
-                            y: cardRect.y + cardRect.height - 34
-                        }
-                    ];
-
-                    for (const point of fallbackPoints) {
-                        const x = point.x;
-                        const y = point.y;
-                        const topEl = document.elementFromPoint(x, y);
-
-                        if (!topEl) continue;
-
-                        if (!card.contains(topEl) && topEl !== card) {
-                            continue;
-                        }
-
-                        topEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: x, clientY: y }));
-                        topEl.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }));
-                        topEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
-                        topEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
-                        topEl.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
-
-                        return {
-                            clicked: true,
-                            method: 'card coordinate',
-                            x,
-                            y,
-                            topTag: topEl.tagName,
-                            topText: textOf(topEl),
-                            cardX: cardRect.x,
-                            cardY: cardRect.y,
-                            cardWidth: cardRect.width,
-                            cardHeight: cardRect.height
-                        };
-                    }
-
                     return {
                         clicked: false,
                         reason: '没有找到可点击的 Renew 按钮',
@@ -355,9 +309,6 @@ def run():
             return False
 
         def wait_for_renew_method_popup(max_seconds=25):
-            """
-            等待 Choose Renewal Method 弹窗。
-            """
             print("等待 Choose Renewal Method 弹窗...")
 
             start = time.time()
@@ -379,179 +330,27 @@ def run():
             save_debug("renew_method_popup_not_found.png")
             return False
 
-        def click_watch_video_option():
+        def click_watch_video_option_until_video_panel():
             """
-            重点修复：
-            不再点击弹窗大容器中心。
-            专门点击左侧播放三角形 / Get +24 hours by watching video 区域。
+            点击 Get +24 hours by watching video。
+            已根据你的日志确认：
+            第三个固定点 x=405, y=365 有效。
             """
             print("准备点击 Get +24 hours by watching video...")
 
-            time.sleep(1)
-
             save_debug("before_click_watch_video_option.png")
 
-            # 方法 1：根据弹窗位置动态计算播放区域
-            try:
-                modal_info = page.evaluate(
-                    """
-                    () => {
-                        function isVisible(el) {
-                            if (!el) return false;
-
-                            const rect = el.getBoundingClientRect();
-                            const style = window.getComputedStyle(el);
-
-                            return (
-                                rect.width > 0 &&
-                                rect.height > 0 &&
-                                rect.bottom > 0 &&
-                                rect.right > 0 &&
-                                rect.top < window.innerHeight &&
-                                rect.left < window.innerWidth &&
-                                style.display !== 'none' &&
-                                style.visibility !== 'hidden' &&
-                                style.opacity !== '0'
-                            );
-                        }
-
-                        function textOf(el) {
-                            return (el.innerText || el.textContent || '').trim();
-                        }
-
-                        const all = Array.from(document.querySelectorAll('body *'));
-
-                        let title = null;
-
-                        for (const el of all) {
-                            if (textOf(el).includes('Choose Renewal Method') && isVisible(el)) {
-                                title = el;
-                                break;
-                            }
-                        }
-
-                        if (!title) {
-                            return {
-                                found: false,
-                                reason: '没有找到 Choose Renewal Method 标题'
-                            };
-                        }
-
-                        let modal = title;
-
-                        for (let i = 0; i < 12 && modal && modal !== document.body; i++) {
-                            const rect = modal.getBoundingClientRect();
-                            const text = textOf(modal);
-
-                            if (
-                                text.includes('Choose Renewal Method') &&
-                                text.includes('watching video') &&
-                                rect.width >= 300 &&
-                                rect.height >= 200 &&
-                                rect.width <= 800 &&
-                                rect.height <= 600
-                            ) {
-                                break;
-                            }
-
-                            modal = modal.parentElement;
-                        }
-
-                        if (!modal || modal === document.body) {
-                            return {
-                                found: false,
-                                reason: '没有找到 Renewal 弹窗容器'
-                            };
-                        }
-
-                        const rect = modal.getBoundingClientRect();
-
-                        return {
-                            found: true,
-                            x: rect.x,
-                            y: rect.y,
-                            width: rect.width,
-                            height: rect.height,
-                            text: textOf(modal)
-                        };
-                    }
-                    """
-                )
-
-                print(f"Renewal 弹窗位置：{modal_info}")
-
-                if modal_info and modal_info.get("found"):
-                    mx = modal_info["x"]
-                    my = modal_info["y"]
-                    mw = modal_info["width"]
-                    mh = modal_info["height"]
-
-                    # 这些点都在弹窗左侧播放卡片区域。
-                    # 从你的截图看，播放三角形大概在弹窗左侧中上部。
-                    points = [
-                        # 播放三角形附近
-                        (mx + mw * 0.25, my + mh * 0.38),
-
-                        # Get +24 hours by watching video 文字中心
-                        (mx + mw * 0.25, my + mh * 0.55),
-
-                        # 左侧卡片整体中心
-                        (mx + mw * 0.25, my + mh * 0.48),
-
-                        # 稍微偏右一点，防止三角形位置变化
-                        (mx + mw * 0.32, my + mh * 0.42),
-
-                        # 稍微偏下一点
-                        (mx + mw * 0.32, my + mh * 0.56),
-                    ]
-
-                    for index, point in enumerate(points):
-                        x, y = point
-
-                        print(f"尝试点击播放广告区域第 {index + 1} 个点：x={x}, y={y}")
-
-                        page.mouse.move(x, y)
-                        time.sleep(0.2)
-                        page.mouse.down()
-                        time.sleep(0.2)
-                        page.mouse.up()
-
-                        time.sleep(3)
-
-                        save_debug(f"after_click_watch_point_{index + 1}.png")
-
-                        # 点完后检查弹窗是否消失，或者页面文字是否变化
-                        try:
-                            body_text = page.locator("body").inner_text(timeout=1000)
-                        except:
-                            body_text = ""
-
-                        if "Choose Renewal Method" not in body_text:
-                            print("Choose Renewal Method 弹窗已经消失，说明播放选项可能点击成功")
-                            return True
-
-                        # 如果弹窗还在，但页面可能已经开始加载广告，也继续尝试下一个点
-                        print("弹窗还在，继续尝试下一个播放区域点")
-
-            except Exception as e:
-                print(f"动态点击播放区域失败：{e}")
-
-            # 方法 2：根据你截图的固定坐标兜底
-            # 你的截图中播放三角形大约在 x=405, y=315 附近。
             fixed_points = [
                 (405, 315),
                 (410, 320),
+                # 这个点是你这次验证成功的点
                 (405, 365),
-                (420, 360),
-                (395, 355),
             ]
 
-            for index, point in enumerate(fixed_points):
-                x, y = point
+            for index, (x, y) in enumerate(fixed_points):
+                print(f"尝试固定坐标点击播放广告区域第 {index + 1} 个点：x={x}, y={y}")
 
                 try:
-                    print(f"尝试固定坐标点击播放广告区域第 {index + 1} 个点：x={x}, y={y}")
-
                     page.mouse.move(x, y)
                     time.sleep(0.2)
                     page.mouse.down()
@@ -567,14 +366,19 @@ def run():
                     except:
                         body_text = ""
 
-                    if "Choose Renewal Method" not in body_text:
-                        print("弹窗已经消失，播放广告选项点击成功")
+                    if (
+                        "Watch Video to Renew" in body_text
+                        or "Watch the video for 240 seconds" in body_text
+                        or "YouTube" in body_text
+                    ):
+                        print("已经进入 Watch Video to Renew 页面")
+                        save_debug("watch_video_to_renew_ready.png")
                         return True
 
                 except Exception as e:
-                    print(f"固定坐标点击播放广告失败：{e}")
+                    print(f"点击播放广告区域失败：{e}")
 
-            print("播放广告选项可能没有点击成功")
+            print("没有进入 Watch Video to Renew 页面")
             save_debug("watch_video_option_click_failed.png")
             return False
 
@@ -623,11 +427,20 @@ def run():
                 print("任务失败：点击 Renew 后没有弹出 Choose Renewal Method")
                 return
 
-            # 5. 点击左侧播放广告选项
-            if click_watch_video_option():
-                print("任务完成：已经点击播放广告选项")
-            else:
-                print("任务失败：没有点击到播放广告选项")
+            # 5. 点击 Get +24 hours by watching video
+            if not click_watch_video_option_until_video_panel():
+                print("任务失败：没有进入 Watch Video to Renew 页面")
+                return
+
+            print("已到达 Watch Video to Renew 页面。")
+            print("")
+            print("如果要人工操作，把 browser 启动参数改成 headless=False。")
+
+            # 保存最终截图
+            save_debug("final_manual_step.png")
+
+            # 如果你改成 headless=False，可以把下面这行取消注释，让窗口停留 10 分钟方便你手动点
+            # time.sleep(600)
 
         except Exception as e:
             print(f"异常：{e}")
