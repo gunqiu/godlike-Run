@@ -1,121 +1,437 @@
 import os
 import time
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-# 配置信息
-HOME_URL = "https://godlike.host/"
 LOGIN_URL = "https://ultra.panel.godlike.host/login"
 SERVER_URL = "https://ultra.panel.godlike.host/server/2a3af930"
 
+
 def run():
     with sync_playwright() as p:
-        # 尝试使用更“像人”的启动参数
-        browser = p.chromium.launch(headless=True, args=[
-            '--disable-blink-features=AutomationControlled',
-            '--no-sandbox',
-            '--disable-setuid-sandbox'
-        ])
-        
-        # 深度伪装 Context
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            locale="en-US",
-            timezone_id="America/New_York"
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
         )
-        
-        # 注入脚本，抹除自动化痕迹
-        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page = context.new_page()
 
-        def clear_popups():
-            """强力清理所有妨碍点击的弹窗"""
+        def save_debug(name):
             try:
-                page.evaluate("""() => {
-                    const selectors = ['[class*="modal"]', '[class*="dialog"]', 'iframe[title*="chat"]', '.fixed.bottom-4', '[id*="hubspot"]'];
-                    selectors.forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
-                }""")
-            except: pass
+                page.screenshot(path=name, full_page=True)
+                print(f"[截图已保存] {name}")
+            except Exception as e:
+                print(f"[截图失败] {name}: {e}")
 
-        # --- 步骤 1: 登录 (带重试和伪装) ---
-        print("\n" + "="*40 + "\n步骤 1: 执行登录 (尝试绕过检测)")
-        try:
-            # 策略：先去主页，再跳登录页，模拟真实访问路径
-            page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
-            time.sleep(2)
-            page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
-            
-            # 等待邮箱输入框
-            email_field = page.locator('input[type="email"]').first
-            email_field.wait_for(state="visible", timeout=60000)
-            
-            # 模拟人工输入速度
-            email_field.type(os.environ["GODLIKE_EMAIL"], delay=100)
-            page.locator('input[type="password"]').first.type(os.environ["GODLIKE_PASSWORD"], delay=100)
-            
-            # 点击登录按钮
-            page.locator('button:has-text("Login")').first.click()
-            page.wait_for_url(lambda url: "login" not in url, timeout=30000)
-            print("✅ 登录成功")
-        except Exception as e:
-            print(f"❌ 登录失败: {e}")
-            page.screenshot(path="LOGIN_FAIL.png")
-            browser.close()
-            return
+        def fail(step_name):
+            """任务在某步失败时调用：截图并退出。"""
+            save_debug(f"FAIL_{step_name}.png")
+            print(f"❌ 任务失败于步骤：{step_name}")
 
-        # --- 步骤 2: 点击 Renew (核心战场) ---
-        print("\n" + "="*40 + "\n步骤 2: 点击 1 号图 Renew")
-        page.goto(SERVER_URL, wait_until="domcontentloaded", timeout=60000)
-        time.sleep(15) 
-        
-        clear_popups()
-        page.keyboard.press("Escape")
-        
-        # 查找按钮并强行点击
-        btn = page.locator('button:has-text("Renew"), a:has-text("Renew"), [role="button"]:has-text("Renew")').first
-        if btn.is_visible():
-            btn.click(force=True)
-            print("✅ 已点击 Renew 按钮")
-        else:
-            print("⚠️ 未发现按钮标签，尝试坐标保底点击 (240, 485)")
-            page.mouse.click(240, 485)
-        time.sleep(8)
-
-        # --- 步骤 3 & 4: 播放视频 ---
-        print("\n" + "="*40 + "\n步骤 3 & 4: 启动 2、3 号图播放逻辑")
-        clear_popups()
-        # 点击屏幕中央激活可能存在的弹窗播放
-        page.mouse.click(640, 400) 
-        time.sleep(5)
-        # 尝试点 YouTube 按钮
-        for frame in page.frames:
-            if "youtube" in frame.url:
-                try:
-                    frame.locator(".ytp-large-play-button").click(force=True, timeout=5000)
-                    print("✅ 已点击视频内播放按钮")
-                except: pass
-        
-        # --- 步骤 5: 领取奖励 ---
-        print("\n" + "="*40 + "\n步骤 5: 等待 4 号图奖励")
-        start = time.time()
-        while time.time() - start < 540:
-            if int(time.time() - start) % 60 == 0:
-                print(f"等待中: {int(time.time() - start)} 秒...")
-                clear_popups()
-                page.keyboard.press("Escape")
-
-            if "Get +12 Hours" in page.content():
-                print("🎉 发现奖励按钮！执行领取")
-                page.get_by_text("Get +12 Hours").first.click(force=True)
-                print("✨ 任务圆满完成！")
+        def safe_goto(url, name):
+            print(f"打开 {name}...")
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 time.sleep(5)
-                browser.close()
-                return
-            time.sleep(10)
+                return True
+            except PlaywrightTimeoutError:
+                time.sleep(5)
+                return True
+            except Exception as e:
+                print(f"打开失败：{e}")
+                time.sleep(5)
+                return False
 
-        print("❌ 最终超时")
-        page.screenshot(path="FINAL_TIMEOUT.png")
-        browser.close()
+        def get_body_text():
+            try:
+                return page.locator("body").inner_text(timeout=1500)
+            except:
+                return ""
+
+        # ── Premium 弹窗（仅在 Renew 点击前可能出现）────────────────
+
+        def close_premium_popup():
+            body = get_body_text()
+            if "Do you love Godlike?" not in body and "Claim -50% Off" not in body:
+                return False
+            closed = page.evaluate("""
+                () => {
+                    function textOf(el){return(el.innerText||el.textContent||'').trim();}
+                    function vis(el){
+                        const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
+                        return r.width>0&&r.height>0&&r.top<window.innerHeight&&
+                               s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
+                    }
+                    for(const el of document.querySelectorAll('button,a,[role="button"],div,span')){
+                        if(textOf(el).includes("I'm fine with waiting")&&vis(el)){
+                            el.click();return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
+            if closed:
+                time.sleep(1.5)
+                return True
+            try:
+                page.mouse.click(720, 100)
+                time.sleep(1)
+            except:
+                pass
+            return True
+
+        # ── 步骤 1：登录 ──────────────────────────────────────────────
+
+        def step_login():
+            print("=" * 50)
+            print("步骤 1：登录")
+            safe_goto(LOGIN_URL, "登录页")
+            try:
+                sw = page.get_by_text("Through Login/Password")
+                if sw.is_visible(timeout=3000):
+                    sw.click(force=True)
+            except:
+                pass
+            page.locator('input[type="email"]').first.fill(os.environ["GODLIKE_EMAIL"])
+            page.locator('input[type="password"]').first.fill(os.environ["GODLIKE_PASSWORD"])
+            page.locator('button:has-text("Login")').first.click()
+            page.wait_for_url(lambda url: "login" not in url, timeout=25000)
+            print("✅ 登录成功")
+
+        # ── 步骤 2：打开服务器页面 ────────────────────────────────────
+
+        def step_open_server():
+            print("=" * 50)
+            print("步骤 2：打开服务器页面")
+            safe_goto(SERVER_URL, "服务器管理页")
+            time.sleep(3)
+            print("✅ 服务器页面已打开")
+
+        # ── 步骤 3：点击 Renew ────────────────────────────────────────
+
+        def step_click_renew(max_seconds=40):
+            print("=" * 50)
+            print("步骤 3：点击 Renew 按钮")
+            start = time.time()
+            while time.time() - start < max_seconds:
+                close_premium_popup()
+                result = page.evaluate("""
+                    () => {
+                        function vis(el){
+                            const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
+                            return r.width>0&&r.height>0&&r.bottom>0&&r.top<window.innerHeight&&
+                                   r.left<window.innerWidth&&s.display!=='none'&&
+                                   s.visibility!=='hidden'&&s.opacity!=='0';
+                        }
+                        function textOf(el){return(el.innerText||el.textContent||'').trim();}
+                        let title=null;
+                        for(const el of document.querySelectorAll('body *')){
+                            if(textOf(el)==='Renew Server'&&vis(el)){title=el;break;}
+                        }
+                        if(!title) return{clicked:false,reason:'no title'};
+                        let card=title;
+                        for(let i=0;i<12&&card&&card!==document.body;i++){
+                            const t=textOf(card),r=card.getBoundingClientRect();
+                            if(t.includes('Renew Server')&&t.includes('suspended')&&
+                               r.width>=180&&r.height>=80&&r.width<=600&&r.height<=300) break;
+                            card=card.parentElement;
+                        }
+                        if(!card||card===document.body) return{clicked:false,reason:'no card'};
+                        let best=null;
+                        for(const el of card.querySelectorAll('button,a,[role="button"],div,span')){
+                            const t=textOf(el);
+                            if(!t.includes('Renew')||!vis(el)) continue;
+                            let node=el;
+                            for(let i=0;i<8&&node&&node!==document.body;i++){
+                                const tag=node.tagName.toLowerCase(),s=window.getComputedStyle(node);
+                                if(tag==='button'||tag==='a'||node.getAttribute('role')==='button'||s.cursor==='pointer'){
+                                    const r=node.getBoundingClientRect();
+                                    if(r.width>=30&&r.height>=20&&r.width<=160&&r.height<=80){
+                                        if(!best||(r.width*r.height)<(best.w*best.h))
+                                            best={el:node,x:r.x+r.width/2,y:r.y+r.height/2,w:r.width,h:r.height};
+                                        break;
+                                    }
+                                }
+                                node=node.parentElement;
+                            }
+                        }
+                        if(!best) return{clicked:false,reason:'no btn'};
+                        const top=document.elementFromPoint(best.x,best.y);
+                        if(top&&!best.el.contains(top)&&!top.contains(best.el))
+                            return{clicked:false,reason:'covered'};
+                        best.el.scrollIntoView({block:'center'});
+                        best.el.click();
+                        return{clicked:true,x:best.x,y:best.y};
+                    }
+                """)
+                if result and result.get("clicked"):
+                    time.sleep(3)
+                    print("✅ Renew 已点击")
+                    return True
+                time.sleep(1)
+            fail("click_renew")
+            return False
+
+        # ── 步骤 4：等待 Choose Renewal Method ───────────────────────
+
+        def step_wait_renewal_popup(max_seconds=25):
+            print("=" * 50)
+            print("步骤 4：等待 Choose Renewal Method 弹窗")
+            start = time.time()
+            while time.time() - start < max_seconds:
+                if "Choose Renewal Method" in get_body_text():
+                    print("✅ Choose Renewal Method 弹窗已出现")
+                    return True
+                time.sleep(1)
+            fail("renewal_popup")
+            return False
+
+        # ── 步骤 5：点击 ▶ ───────────────────────────────────────────
+
+        def step_click_play_option():
+            print("=" * 50)
+            print("步骤 5：点击 ▶ Get +24 hours by watching video")
+
+            clicked = page.evaluate("""
+                () => {
+                    function vis(el){
+                        const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
+                        return r.width>0&&r.height>0&&r.top<window.innerHeight&&
+                               s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
+                    }
+                    function textOf(el){return(el.innerText||el.textContent||'').trim();}
+                    let container=null;
+                    for(const el of document.querySelectorAll('body *')){
+                        const t=textOf(el);
+                        if(t.includes('Get +24 hours')&&t.includes('watching')&&vis(el)){
+                            if(!container||el.contains(container)) container=el;
+                        }
+                    }
+                    if(container){
+                        let node=container;
+                        for(let i=0;i<12&&node&&node!==document.body;i++){
+                            const tag=node.tagName.toLowerCase(),s=window.getComputedStyle(node);
+                            if(tag==='button'||tag==='a'||node.getAttribute('role')==='button'||s.cursor==='pointer'){
+                                const r=node.getBoundingClientRect();
+                                if(r.width>20&&r.height>20){
+                                    node.scrollIntoView({block:'center'});
+                                    node.click();
+                                    return{clicked:true,method:'text-parent'};
+                                }
+                            }
+                            node=node.parentElement;
+                        }
+                        container.click();
+                        return{clicked:true,method:'container-direct'};
+                    }
+                    for(const dialog of document.querySelectorAll('[role="dialog"],.modal,[class*="modal"],[class*="popup"]')){
+                        if(!vis(dialog)||!textOf(dialog).includes('Choose Renewal')) continue;
+                        for(const btn of dialog.querySelectorAll('button,[role="button"],svg,[class*="play"]')){
+                            if(!vis(btn)) continue;
+                            const r=btn.getBoundingClientRect();
+                            if(r.width>10&&r.height>10){btn.click();return{clicked:true,method:'dialog-svg'};}
+                        }
+                    }
+                    return{clicked:false};
+                }
+            """)
+            print(f"DOM 点击结果：{clicked}")
+            time.sleep(2)
+
+            if "Choose Renewal Method" not in get_body_text():
+                print("✅ 视频页已打开")
+                return True
+
+            # 固定坐标兜底
+            for x, y in [(375, 280), (375, 260), (375, 300), (380, 275), (370, 285)]:
+                print(f"固定坐标 ({x},{y})...")
+                page.mouse.click(x, y)
+                time.sleep(2)
+                if "Choose Renewal Method" not in get_body_text():
+                    print(f"✅ 坐标 ({x},{y}) 有效")
+                    return True
+
+            fail("click_play_option")
+            return False
+
+        # ── 步骤 6：点击 YouTube 播放按钮 ────────────────────────────
+
+        def step_click_youtube_play():
+            print("=" * 50)
+            print("步骤 6：点击 YouTube 播放按钮")
+            time.sleep(3)  # 等页面稳定
+
+            # iframe
+            try:
+                for frame in page.frames:
+                    if "youtube.com" in frame.url or "youtube-nocookie.com" in frame.url:
+                        print(f"找到 YouTube iframe")
+                        for sel in [".ytp-large-play-button", "button.ytp-play-button",
+                                    "[aria-label='Play']", "[aria-label='play']"]:
+                            try:
+                                btn = frame.locator(sel).first
+                                if btn.is_visible(timeout=2000):
+                                    btn.click(force=True)
+                                    print(f"✅ iframe 播放已点击：{sel}")
+                                    time.sleep(2)
+                                    return True
+                            except:
+                                pass
+            except Exception as e:
+                print(f"iframe 失败：{e}")
+
+            # DOM
+            clicked = page.evaluate("""
+                () => {
+                    function vis(el){
+                        const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
+                        return r.width>0&&r.height>0&&r.top<window.innerHeight&&
+                               s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
+                    }
+                    for(const sel of['button[aria-label*="play" i]','.ytp-large-play-button',
+                                     '.ytp-play-button','div[class*="video"] button','div[class*="player"] button']){
+                        for(const el of document.querySelectorAll(sel)){
+                            if(vis(el)){el.click();return{ok:true,sel};}
+                        }
+                    }
+                    for(const btn of document.querySelectorAll('button,[role="button"]')){
+                        if(!vis(btn)) continue;
+                        if(btn.querySelectorAll('svg,path,polygon').length>0){
+                            const r=btn.getBoundingClientRect();
+                            if(r.width>20&&r.width<200&&r.height>20&&r.height<200){
+                                btn.click();return{ok:true,sel:'svg-btn'};
+                            }
+                        }
+                    }
+                    return{ok:false};
+                }
+            """)
+            if clicked and clicked.get("ok"):
+                print(f"✅ DOM 播放已点击")
+                time.sleep(2)
+                return True
+
+            # 固定坐标
+            for x, y in [(487, 262), (487, 245), (487, 275)]:
+                page.mouse.click(x, y)
+                time.sleep(2)
+                playing = page.evaluate("""
+                    ()=>{for(const v of document.querySelectorAll('video'))
+                           if(!v.paused&&v.currentTime>0) return true; return false;}
+                """)
+                if playing:
+                    print("✅ 视频播放中（坐标点击）")
+                    return True
+
+            # 播放失败也不截图，继续等待（视频可能是自动播放的）
+            print("⚠️ 未确认播放，继续监控（可能已自动播放）")
+            return True
+
+        # ── 步骤 7：等待奖励弹窗并点击 ───────────────────────────────
+
+        def step_wait_and_claim_reward(total_wait=300):
+            """
+            等待 240 秒视频播放完毕后出现的奖励弹窗，点击领取。
+            失败时才截图。
+            """
+            print("=" * 50)
+            print(f"步骤 7：等待奖励弹窗（最长 {total_wait} 秒）")
+            start = time.time()
+            reward_keywords = [
+                "Get +24 hours", "+24 hours", "Claim your",
+                "You've earned", "server renewed", "Server Renewed", "Congratulations"
+            ]
+
+            while True:
+                elapsed = time.time() - start
+                if elapsed >= total_wait:
+                    fail("reward_timeout")
+                    return False
+
+                body = get_body_text()
+                found = next((kw for kw in reward_keywords
+                              if kw in body and "Do you love Godlike?" not in body), None)
+
+                if found:
+                    print(f"[{int(elapsed)}s] ✅ 检测到奖励关键词：'{found}'")
+
+                    clicked = page.evaluate("""
+                        () => {
+                            function textOf(el){return(el.innerText||el.textContent||'').trim();}
+                            function vis(el){
+                                const r=el.getBoundingClientRect(),s=window.getComputedStyle(el);
+                                return r.width>0&&r.height>0&&r.top<window.innerHeight&&
+                                       s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
+                            }
+                            for(const kw of['Get +24 hours','+24 hours','Claim','Collect','Congratulations']){
+                                for(const el of document.querySelectorAll('button,a,[role="button"],div,span')){
+                                    if(textOf(el).includes(kw)&&vis(el)){
+                                        const r=el.getBoundingClientRect();
+                                        if(r.width>20&&r.width<400&&r.height>20&&r.height<120){
+                                            el.scrollIntoView({block:'center'});
+                                            el.click();
+                                            return{clicked:true,kw,text:textOf(el)};
+                                        }
+                                    }
+                                }
+                            }
+                            return{clicked:false};
+                        }
+                    """)
+                    print(f"奖励点击结果：{clicked}")
+
+                    if clicked and clicked.get("clicked"):
+                        print("🎉 成功点击奖励按钮！")
+                        return True
+
+                    # 兜底坐标
+                    for fx, fy in [(490, 430), (490, 450), (490, 410)]:
+                        page.mouse.click(fx, fy)
+                        time.sleep(1)
+                    if not any(kw in get_body_text() for kw in reward_keywords):
+                        print("🎉 弹窗已消失，判断点击成功")
+                        return True
+
+                    # 还在的话截图排查
+                    fail("reward_click_failed")
+                    return False
+
+                if int(elapsed) % 60 == 0 and elapsed > 0:
+                    print(f"[{int(elapsed)}s] 仍在等待奖励弹窗...")
+
+                time.sleep(2)
+
+        # ── 主流程 ────────────────────────────────────────────────────
+        try:
+            step_login()
+            step_open_server()
+
+            if not step_click_renew():
+                return
+            if not step_wait_renewal_popup():
+                return
+            if not step_click_play_option():
+                return
+
+            step_click_youtube_play()
+
+            success = step_wait_and_claim_reward(total_wait=300)
+
+            print("=" * 50)
+            if success:
+                print("🎉 任务完成：服务器已续期 +24 小时！")
+            else:
+                print("⚠️ 任务未完成，请查看截图")
+
+        except Exception as e:
+            print(f"❌ 未捕获异常：{e}")
+            save_debug("FAIL_exception.png")
+        finally:
+            browser.close()
+
 
 if __name__ == "__main__":
     run()
