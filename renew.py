@@ -35,9 +35,6 @@ def run():
                 print(f"保存截图失败：{e}")
 
         def safe_goto(url, name):
-            """
-            不使用 networkidle，避免网站一直有后台请求导致超时。
-            """
             print(f"正在打开{name}：{url}")
 
             try:
@@ -54,306 +51,544 @@ def run():
                 time.sleep(5)
                 return False
 
-        def close_premium_popup_only():
+        def close_premium_popup_only_if_blocks():
             """
-            只处理中间大的 Premium 50% 弹窗。
-            不再处理左下角问卷。
+            只处理中间 Premium 大弹窗。
+            不处理左下角问卷，不点问卷。
             """
             try:
-                result = page.evaluate(
-                    """
-                    () => {
-                        const text = document.body.innerText || '';
+                body_text = page.locator("body").inner_text(timeout=1000)
+            except:
+                body_text = ""
 
-                        if (
-                            !text.includes('Do you love Godlike?') &&
-                            !text.includes('Claim -50% Off') &&
-                            !text.includes("I'm fine with waiting in the queue")
-                        ) {
-                            return {
-                                found: false,
-                                action: '没有 Premium 大弹窗'
-                            };
-                        }
+            if (
+                "Do you love Godlike?" not in body_text
+                and "Claim -50% Off" not in body_text
+                and "I'm fine with waiting in the queue" not in body_text
+            ):
+                return
 
-                        // 优先点击右上角 X，按照当前截图位置
-                        const x = 905;
-                        const y = 128;
-                        const el = document.elementFromPoint(x, y);
+            print("检测到 Premium 大弹窗，尝试关闭")
 
-                        if (el) {
-                            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
-                            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
-                            el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
-
-                            return {
-                                found: true,
-                                action: '已点击 Premium X',
-                                tag: el.tagName,
-                                text: el.innerText || el.textContent || ''
-                            };
-                        }
-
-                        return {
-                            found: true,
-                            action: '发现 Premium 大弹窗，但没有点到 X'
-                        };
-                    }
-                    """
-                )
-
-                print(f"Premium 弹窗检测结果：{result}")
+            # Premium 大弹窗右上角 X
+            try:
+                page.mouse.click(905, 128)
                 time.sleep(1)
-            except Exception as e:
-                print(f"关闭 Premium 弹窗失败：{e}")
-
-            try:
-                page.keyboard.press("Escape")
-                time.sleep(0.5)
             except:
                 pass
 
-        def find_renew_button_info():
-            """
-            检测 Renew 按钮是否存在、是否可见、是否被遮挡。
-            重点：只找 Renew Server 卡片里的 Renew，不找其他页面元素。
-            """
+            # Premium 大弹窗底部 I'm fine...
             try:
-                result = page.evaluate(
-                    """
-                    () => {
-                        function isVisible(el) {
-                            if (!el) return false;
+                page.mouse.click(640, 615)
+                time.sleep(1)
+            except:
+                pass
 
-                            const rect = el.getBoundingClientRect();
-                            const style = window.getComputedStyle(el);
+            try:
+                page.keyboard.press("Escape")
+                time.sleep(1)
+            except:
+                pass
 
-                            return (
-                                rect.width > 0 &&
-                                rect.height > 0 &&
-                                rect.bottom > 0 &&
-                                rect.right > 0 &&
-                                rect.top < window.innerHeight &&
-                                rect.left < window.innerWidth &&
-                                style.display !== 'none' &&
-                                style.visibility !== 'hidden' &&
-                                style.opacity !== '0'
+        def find_and_click_renew():
+            """
+            核心：只找 Renew Server 卡片里的 Renew 按钮。
+            如果没有挡住，就点击。
+            """
+            print("开始寻找 Renew 按钮...")
+
+            result = page.evaluate(
+                """
+                () => {
+                    function isVisible(el) {
+                        if (!el) return false;
+
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+
+                        return (
+                            rect.width > 0 &&
+                            rect.height > 0 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.display !== 'none' &&
+                            style.visibility !== 'hidden' &&
+                            style.opacity !== '0'
+                        );
+                    }
+
+                    function textOf(el) {
+                        return (el.innerText || el.textContent || '').trim();
+                    }
+
+                    function findClickable(el) {
+                        let node = el;
+
+                        for (let i = 0; i < 8 && node && node !== document.body; i++) {
+                            const tag = node.tagName ? node.tagName.toLowerCase() : '';
+                            const role = node.getAttribute ? node.getAttribute('role') : '';
+                            const style = window.getComputedStyle(node);
+
+                            if (
+                                tag === 'button' ||
+                                tag === 'a' ||
+                                role === 'button' ||
+                                style.cursor === 'pointer' ||
+                                typeof node.onclick === 'function'
+                            ) {
+                                return node;
+                            }
+
+                            node = node.parentElement;
+                        }
+
+                        return el;
+                    }
+
+                    const all = Array.from(document.querySelectorAll('body *'));
+
+                    // 1. 找 Renew Server 标题
+                    let renewTitle = null;
+
+                    for (const el of all) {
+                        const text = textOf(el);
+
+                        if (text === 'Renew Server' && isVisible(el)) {
+                            renewTitle = el;
+                            break;
+                        }
+                    }
+
+                    if (!renewTitle) {
+                        return {
+                            clicked: false,
+                            reason: '没有找到 Renew Server 标题'
+                        };
+                    }
+
+                    // 2. 找 Renew Server 卡片
+                    let card = renewTitle;
+
+                    for (let i = 0; i < 12 && card && card !== document.body; i++) {
+                        const rect = card.getBoundingClientRect();
+                        const text = textOf(card);
+
+                        if (
+                            text.includes('Renew Server') &&
+                            text.includes('free server will be suspended') &&
+                            rect.width >= 180 &&
+                            rect.height >= 80 &&
+                            rect.width <= 600 &&
+                            rect.height <= 300
+                        ) {
+                            break;
+                        }
+
+                        card = card.parentElement;
+                    }
+
+                    if (!card || card === document.body) {
+                        return {
+                            clicked: false,
+                            reason: '没有找到 Renew Server 卡片'
+                        };
+                    }
+
+                    const cardRect = card.getBoundingClientRect();
+
+                    // 3. 在卡片里面找 Renew 按钮
+                    const inside = Array.from(card.querySelectorAll('button, a, [role="button"], div, span'));
+
+                    let candidates = [];
+
+                    for (const el of inside) {
+                        const text = textOf(el);
+
+                        if (text.includes('Renew') && isVisible(el)) {
+                            const clickable = findClickable(el);
+                            const rect = clickable.getBoundingClientRect();
+
+                            if (
+                                rect.width >= 30 &&
+                                rect.height >= 20 &&
+                                rect.width <= 160 &&
+                                rect.height <= 80
+                            ) {
+                                candidates.push({
+                                    el: clickable,
+                                    x: rect.x + rect.width / 2,
+                                    y: rect.y + rect.height / 2,
+                                    width: rect.width,
+                                    height: rect.height,
+                                    text: textOf(clickable)
+                                });
+                            }
+                        }
+                    }
+
+                    // 4. 如果找到了真正按钮，点击按钮中心
+                    if (candidates.length > 0) {
+                        candidates.sort((a, b) => (a.width * a.height) - (b.width * b.height));
+
+                        const target = candidates[0];
+                        const topEl = document.elementFromPoint(target.x, target.y);
+
+                        const notCovered =
+                            topEl &&
+                            (
+                                topEl === target.el ||
+                                target.el.contains(topEl) ||
+                                topEl.contains(target.el)
                             );
-                        }
 
-                        function textOf(el) {
-                            return (el.innerText || el.textContent || '').trim();
-                        }
-
-                        function findClickable(el) {
-                            let node = el;
-
-                            for (let i = 0; i < 8 && node && node !== document.body; i++) {
-                                const tag = node.tagName ? node.tagName.toLowerCase() : '';
-                                const role = node.getAttribute ? node.getAttribute('role') : '';
-                                const style = window.getComputedStyle(node);
-
-                                if (
-                                    tag === 'button' ||
-                                    tag === 'a' ||
-                                    role === 'button' ||
-                                    style.cursor === 'pointer' ||
-                                    typeof node.onclick === 'function'
-                                ) {
-                                    return node;
-                                }
-
-                                node = node.parentElement;
-                            }
-
-                            return el;
-                        }
-
-                        const all = Array.from(document.querySelectorAll('body *'));
-
-                        // 第一步：找 Renew Server 卡片
-                        let renewTitle = null;
-
-                        for (const el of all) {
-                            const text = textOf(el);
-
-                            if (text === 'Renew Server' && isVisible(el)) {
-                                renewTitle = el;
-                                break;
-                            }
-                        }
-
-                        if (!renewTitle) {
+                        if (!notCovered) {
                             return {
-                                found: false,
-                                reason: '没有找到 Renew Server 标题'
+                                clicked: false,
+                                reason: 'Renew 按钮被遮挡',
+                                x: target.x,
+                                y: target.y,
+                                topTag: topEl ? topEl.tagName : null,
+                                topText: topEl ? textOf(topEl) : null
                             };
                         }
 
-                        let card = renewTitle;
+                        target.el.scrollIntoView({
+                            block: 'center',
+                            inline: 'center'
+                        });
 
-                        for (let i = 0; i < 10 && card && card !== document.body; i++) {
-                            const rect = card.getBoundingClientRect();
-                            const text = textOf(card);
+                        target.el.click();
+
+                        return {
+                            clicked: true,
+                            method: 'DOM Renew button',
+                            x: target.x,
+                            y: target.y,
+                            text: target.text,
+                            cardX: cardRect.x,
+                            cardY: cardRect.y,
+                            cardWidth: cardRect.width,
+                            cardHeight: cardRect.height
+                        };
+                    }
+
+                    // 5. 如果文字按钮找不到，按卡片位置计算 Renew 按钮中心
+                    // 适配两种布局：Renew 卡片在左侧 或 Renew 卡片在右侧
+                    const fallbackPoints = [
+                        {
+                            x: cardRect.x + 62,
+                            y: cardRect.y + cardRect.height - 36
+                        },
+                        {
+                            x: cardRect.x + 55,
+                            y: cardRect.y + cardRect.height - 42
+                        },
+                        {
+                            x: cardRect.x + 70,
+                            y: cardRect.y + cardRect.height - 34
+                        }
+                    ];
+
+                    for (const point of fallbackPoints) {
+                        const x = point.x;
+                        const y = point.y;
+                        const topEl = document.elementFromPoint(x, y);
+
+                        if (!topEl) continue;
+
+                        const topText = textOf(topEl);
+
+                        // 这个点必须还在 Renew Server 卡片里面，避免乱点
+                        if (!card.contains(topEl) && topEl !== card) {
+                            continue;
+                        }
+
+                        topEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: x, clientY: y }));
+                        topEl.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }));
+                        topEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
+                        topEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
+                        topEl.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+
+                        return {
+                            clicked: true,
+                            method: 'card coordinate',
+                            x,
+                            y,
+                            topTag: topEl.tagName,
+                            topText,
+                            cardX: cardRect.x,
+                            cardY: cardRect.y,
+                            cardWidth: cardRect.width,
+                            cardHeight: cardRect.height
+                        };
+                    }
+
+                    return {
+                        clicked: false,
+                        reason: '没有找到可点击的 Renew 按钮',
+                        cardX: cardRect.x,
+                        cardY: cardRect.y,
+                        cardWidth: cardRect.width,
+                        cardHeight: cardRect.height,
+                        cardText: textOf(card)
+                    };
+                }
+                """
+            )
+
+            print(f"点击 Renew 结果：{result}")
+
+            if result and result.get("clicked"):
+                time.sleep(3)
+                save_debug("after_click_renew.png")
+                return True
+
+            return False
+
+        def wait_and_click_renew(max_seconds=40):
+            """
+            最多等 40 秒。
+            只要 Renew 没被挡住，就点。
+            不跑十几分钟。
+            """
+            print("开始检测当前画面，只要 Renew 没被挡住就点击...")
+
+            start = time.time()
+
+            while time.time() - start < max_seconds:
+                close_premium_popup_only_if_blocks()
+
+                if find_and_click_renew():
+                    return True
+
+                print("Renew 暂时没点到，1 秒后重试")
+                time.sleep(1)
+
+            print("超过 40 秒还没有点到 Renew")
+            save_debug("renew_click_failed.png")
+            return False
+
+        def wait_for_renew_method_popup(max_seconds=25):
+            """
+            等待弹出 Choose Renewal Method。
+            """
+            print("等待 Choose Renewal Method 弹窗...")
+
+            start = time.time()
+
+            while time.time() - start < max_seconds:
+                try:
+                    body_text = page.locator("body").inner_text(timeout=1000)
+
+                    if "Choose Renewal Method" in body_text:
+                        print("已经检测到 Choose Renewal Method 弹窗")
+                        save_debug("renew_method_popup.png")
+                        return True
+                except:
+                    pass
+
+                time.sleep(1)
+
+            print("没有检测到 Choose Renewal Method 弹窗")
+            save_debug("renew_method_popup_not_found.png")
+            return False
+
+        def click_watch_video_option():
+            """
+            点击 Choose Renewal Method 弹窗里的：
+            Get +24 hours by watching video
+            """
+            print("准备点击 Get +24 hours by watching video...")
+
+            result = page.evaluate(
+                """
+                () => {
+                    function isVisible(el) {
+                        if (!el) return false;
+
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+
+                        return (
+                            rect.width > 0 &&
+                            rect.height > 0 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.display !== 'none' &&
+                            style.visibility !== 'hidden' &&
+                            style.opacity !== '0'
+                        );
+                    }
+
+                    function textOf(el) {
+                        return (el.innerText || el.textContent || '').trim();
+                    }
+
+                    const all = Array.from(document.querySelectorAll('body *'));
+
+                    // 1. 找弹窗标题
+                    let title = null;
+
+                    for (const el of all) {
+                        if (textOf(el).includes('Choose Renewal Method') && isVisible(el)) {
+                            title = el;
+                            break;
+                        }
+                    }
+
+                    if (!title) {
+                        return {
+                            clicked: false,
+                            reason: '没有找到 Choose Renewal Method 标题'
+                        };
+                    }
+
+                    // 2. 找弹窗容器
+                    let modal = title;
+
+                    for (let i = 0; i < 12 && modal && modal !== document.body; i++) {
+                        const rect = modal.getBoundingClientRect();
+                        const text = textOf(modal);
+
+                        if (
+                            text.includes('Choose Renewal Method') &&
+                            text.includes('watching video') &&
+                            rect.width >= 300 &&
+                            rect.height >= 200
+                        ) {
+                            break;
+                        }
+
+                        modal = modal.parentElement;
+                    }
+
+                    if (!modal || modal === document.body) {
+                        return {
+                            clicked: false,
+                            reason: '没有找到 Renewal 弹窗容器'
+                        };
+                    }
+
+                    const modalRect = modal.getBoundingClientRect();
+
+                    // 3. 找 “Get +24 hours by watching video” 文字区域
+                    let videoText = null;
+
+                    for (const el of Array.from(modal.querySelectorAll('body *'))) {
+                        const text = textOf(el);
+
+                        if (
+                            text.includes('Get +24 hours') &&
+                            text.includes('watching video') &&
+                            isVisible(el)
+                        ) {
+                            videoText = el;
+                            break;
+                        }
+                    }
+
+                    if (videoText) {
+                        let clickable = videoText;
+
+                        // 往上找比较大的可点击区域
+                        for (let i = 0; i < 8 && clickable && clickable !== modal; i++) {
+                            const rect = clickable.getBoundingClientRect();
+                            const style = window.getComputedStyle(clickable);
+                            const tag = clickable.tagName ? clickable.tagName.toLowerCase() : '';
+                            const role = clickable.getAttribute ? clickable.getAttribute('role') : '';
 
                             if (
-                                text.includes('Renew Server') &&
-                                text.includes('free server will be suspended') &&
-                                rect.width >= 180 &&
-                                rect.height >= 80 &&
-                                rect.width <= 500 &&
-                                rect.height <= 250
+                                tag === 'button' ||
+                                tag === 'a' ||
+                                role === 'button' ||
+                                style.cursor === 'pointer' ||
+                                rect.width >= 120 && rect.height >= 80
                             ) {
                                 break;
                             }
 
-                            card = card.parentElement;
+                            clickable = clickable.parentElement;
                         }
 
-                        if (!card || card === document.body) {
-                            return {
-                                found: false,
-                                reason: '没有找到 Renew Server 卡片'
-                            };
-                        }
+                        const rect = clickable.getBoundingClientRect();
+                        const x = rect.x + rect.width / 2;
+                        const y = rect.y + rect.height / 2;
 
-                        const cardRect = card.getBoundingClientRect();
-
-                        // 第二步：优先在卡片里面找文字等于 Renew 的按钮
-                        const inside = Array.from(card.querySelectorAll('button, a, [role="button"], div, span'));
-
-                        for (const el of inside) {
-                            const text = textOf(el);
-
-                            if (text === 'Renew' && isVisible(el)) {
-                                const clickable = findClickable(el);
-                                const rect = clickable.getBoundingClientRect();
-
-                                const x = rect.x + rect.width / 2;
-                                const y = rect.y + rect.height / 2;
-
-                                const topEl = document.elementFromPoint(x, y);
-
-                                const notCovered =
-                                    topEl &&
-                                    (
-                                        topEl === clickable ||
-                                        clickable.contains(topEl) ||
-                                        topEl.contains(clickable)
-                                    );
-
-                                return {
-                                    found: true,
-                                    method: 'text Renew',
-                                    x,
-                                    y,
-                                    width: rect.width,
-                                    height: rect.height,
-                                    notCovered,
-                                    topTag: topEl ? topEl.tagName : null,
-                                    topText: topEl ? textOf(topEl) : null,
-                                    buttonText: textOf(clickable)
-                                };
-                            }
-                        }
-
-                        // 第三步：如果文字找不到，就根据 Renew Server 卡片位置计算按钮中心
-                        // 从截图看，Renew 按钮在卡片左下区域
-                        const x = cardRect.x + 52;
-                        const y = cardRect.y + cardRect.height - 34;
-
-                        const topEl = document.elementFromPoint(x, y);
-                        const topText = topEl ? textOf(topEl) : '';
-
-                        const looksLikeRenew =
-                            topEl &&
-                            (
-                                topText.includes('Renew') ||
-                                textOf(card).includes('Renew Server')
-                            );
+                        clickable.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: x, clientY: y }));
+                        clickable.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }));
+                        clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
+                        clickable.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
+                        clickable.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
 
                         return {
-                            found: true,
-                            method: 'card coordinate',
+                            clicked: true,
+                            method: 'video text area',
                             x,
                             y,
-                            width: 80,
-                            height: 40,
-                            notCovered: looksLikeRenew,
-                            topTag: topEl ? topEl.tagName : null,
-                            topText,
-                            cardText: textOf(card)
+                            text: textOf(clickable)
                         };
                     }
-                    """
-                )
 
-                return result
-            except Exception as e:
-                return {
-                    "found": False,
-                    "reason": f"JS 检测 Renew 异常：{e}"
+                    // 4. 如果文字找不到，直接点击弹窗左侧播放区域
+                    // 从你的 11.png 看，播放区域在弹窗左半部分
+                    const fallbackPoints = [
+                        {
+                            x: modalRect.x + modalRect.width * 0.28,
+                            y: modalRect.y + modalRect.height * 0.45
+                        },
+                        {
+                            x: modalRect.x + modalRect.width * 0.30,
+                            y: modalRect.y + modalRect.height * 0.55
+                        },
+                        {
+                            x: modalRect.x + modalRect.width * 0.22,
+                            y: modalRect.y + modalRect.height * 0.40
+                        }
+                    ];
+
+                    for (const point of fallbackPoints) {
+                        const x = point.x;
+                        const y = point.y;
+                        const el = document.elementFromPoint(x, y);
+
+                        if (!el) continue;
+
+                        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: x, clientY: y }));
+                        el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }));
+                        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
+                        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
+                        el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+
+                        return {
+                            clicked: true,
+                            method: 'modal fallback point',
+                            x,
+                            y,
+                            tag: el.tagName,
+                            text: textOf(el)
+                        };
+                    }
+
+                    return {
+                        clicked: false,
+                        reason: '没有找到可点击的视频选项'
+                    };
                 }
+                """
+            )
 
-        def click_renew_when_not_blocked(max_wait_seconds=90):
-            """
-            检测当前画面。
-            只要 Renew 按钮没被挡住，就点击。
-            最多等待 90 秒，不会无限跑十几分钟。
-            """
-            print("开始检测 Renew 按钮是否可点击...")
+            print(f"点击播放广告选项结果：{result}")
 
-            start = time.time()
-            last_print = 0
+            if result and result.get("clicked"):
+                time.sleep(5)
+                save_debug("after_click_watch_video_option.png")
+                return True
 
-            while time.time() - start < max_wait_seconds:
-                info = find_renew_button_info()
-
-                now = time.time()
-                if now - last_print > 3:
-                    print(f"Renew 检测结果：{info}")
-                    last_print = now
-
-                if info.get("found") and info.get("notCovered"):
-                    x = info["x"]
-                    y = info["y"]
-
-                    print(f"Renew 按钮没有被挡住，准备点击：x={x}, y={y}")
-
-                    page.mouse.move(x, y)
-                    time.sleep(0.2)
-                    page.mouse.down()
-                    time.sleep(0.2)
-                    page.mouse.up()
-
-                    time.sleep(5)
-
-                    save_debug("after_click_renew.png")
-
-                    print("已经点击 Renew")
-                    return True
-
-                # 如果是 Premium 大弹窗挡住，就只关 Premium 大弹窗
-                body_text = ""
-                try:
-                    body_text = page.locator("body").inner_text(timeout=1000)
-                except:
-                    pass
-
-                if (
-                    "Do you love Godlike?" in body_text or
-                    "Claim -50% Off" in body_text or
-                    "I'm fine with waiting in the queue" in body_text
-                ):
-                    print("检测到 Premium 大弹窗，尝试关闭")
-                    close_premium_popup_only()
-                else:
-                    print("Renew 还不能点击，等待 1 秒后再检测")
-
-                time.sleep(1)
-
-            print("等待 Renew 可点击超时，没有点击成功")
-            save_debug("renew_not_clicked_timeout.png")
+            save_debug("watch_video_option_click_failed.png")
             return False
 
         try:
@@ -389,13 +624,23 @@ def run():
 
             save_debug("after_server_page.png")
 
-            # 3. 只检测 Renew 按钮，不乱点别的
-            clicked = click_renew_when_not_blocked(max_wait_seconds=90)
+            # 3. 点击 Renew
+            clicked_renew = wait_and_click_renew(max_seconds=40)
 
-            if clicked:
-                print("任务完成：Renew 已点击")
-            else:
+            if not clicked_renew:
                 print("任务失败：没有点击到 Renew")
+                return
+
+            # 4. 等待播放广告弹窗
+            if not wait_for_renew_method_popup(max_seconds=25):
+                print("任务失败：点击 Renew 后没有弹出 Choose Renewal Method")
+                return
+
+            # 5. 点击 Get +24 hours by watching video
+            if click_watch_video_option():
+                print("任务完成：已经点击播放广告选项")
+            else:
+                print("任务失败：没有点击到播放广告选项")
 
         except Exception as e:
             print(f"异常：{e}")
